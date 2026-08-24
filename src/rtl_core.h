@@ -1,0 +1,54 @@
+#ifndef RTL_CORE_H
+#define RTL_CORE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/IOCFPlugIn.h>
+#include <IOKit/usb/IOUSBLib.h>
+#include "rtl_regs.h"
+
+typedef struct {
+    IOUSBDeviceInterface **dev_interface;
+    io_service_t service;
+    uint16_t vid;
+    uint16_t pid;
+    uint16_t version_raw;
+    const rtl_version_info_t *version_info;
+    uint8_t mac_addr[6];
+    char bsd_name[32];
+    char product_name[128];
+    char vendor_name[128];
+    uint64_t usb_link_speed_bps;
+    uint32_t location_id;
+    uint16_t ocp_base;
+} rtl_dev_t;
+
+/* Device Enumeration & Lifecycle */
+int rtl_find_devices(rtl_dev_t **out_devices, int *out_count);
+int rtl_open_device(rtl_dev_t *dev);
+void rtl_close_device(rtl_dev_t *dev);
+void rtl_free_devices(rtl_dev_t *devices, int count);
+rtl_dev_t *rtl_select_device(rtl_dev_t *devices, int count, const char *bsd_name, int index);
+
+/* Low-level OCP transfers */
+int rtl_ocp_read_block(rtl_dev_t *dev, uint16_t index, uint16_t size, void *data, uint16_t type);
+int rtl_ocp_write_block(rtl_dev_t *dev, uint16_t index, uint16_t byteen, uint16_t size, void *data, uint16_t type);
+
+/* Typed OCP register access */
+uint32_t rtl_ocp_read_dword(rtl_dev_t *dev, uint16_t type, uint16_t index);
+uint16_t rtl_ocp_read_word(rtl_dev_t *dev, uint16_t type, uint16_t index);
+uint8_t rtl_ocp_read_byte(rtl_dev_t *dev, uint16_t type, uint16_t index);
+
+int rtl_ocp_write_dword(rtl_dev_t *dev, uint16_t type, uint16_t index, uint32_t data);
+int rtl_ocp_write_word(rtl_dev_t *dev, uint16_t type, uint16_t index, uint16_t data);
+int rtl_ocp_write_byte(rtl_dev_t *dev, uint16_t type, uint16_t index, uint8_t data);
+
+/* GPHY / MII Bank Register Access */
+uint16_t rtl_ocp_reg_read(rtl_dev_t *dev, uint16_t addr);
+int rtl_ocp_reg_write(rtl_dev_t *dev, uint16_t addr, uint16_t data);
+uint16_t rtl_mdio_read(rtl_dev_t *dev, uint32_t reg_addr);
+int rtl_mdio_write(rtl_dev_t *dev, uint32_t reg_addr, uint16_t data);
+
+#endif /* RTL_CORE_H */

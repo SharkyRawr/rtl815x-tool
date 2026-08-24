@@ -1,0 +1,34 @@
+# Compiled binaries and libraries
+rtl815x-tool
+*.dylib
+*.a
+*.so
+
+# Object files and build intermediates
+*.o
+*.obj
+build/
+dist/
+
+# Debugging symbols
+*.dSYM/
+*.d
+
+# Temporary test executables
+test_*
+!test_*.c
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Editor and IDE configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
