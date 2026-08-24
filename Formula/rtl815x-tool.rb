@@ -2,7 +2,7 @@ class Rtl815xTool < Formula
   desc 'Realtek RTL8156 / RTL815x macOS Diagnostics & Control Toolkit'
   homepage 'https://github.com/SharkyRawr/rtl815x-tool'
   url 'https://github.com/SharkyRawr/rtl815x-tool/archive/refs/tags/v1.0.0.tar.gz'
-  sha256 '94c78ffe651bd0cb58dde6aabf0b9cebc059118ed883ddb138e8dd298a289c28'
+  sha256 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
   head 'https://github.com/SharkyRawr/rtl815x-tool.git', branch: 'main'
   license 'CC-BY-NC-SA-4.0'
 
