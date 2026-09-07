@@ -3,7 +3,7 @@
 
 #include "rtl_core.h"
 
-void rtl_led_print_status(rtl_dev_t *dev);
+int rtl_led_print_status(rtl_dev_t *dev);
 int rtl_led_set_mode(rtl_dev_t *dev, const char *mode);
 
 #endif /* RTL_LED_H */

@@ -90,6 +90,10 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
     int capacity = 4;
     rtl_dev_t *list = calloc(capacity, sizeof(rtl_dev_t));
     int count = 0;
+    if (!list) {
+        IOObjectRelease(iter);
+        return -1;
+    }
 
     io_service_t service;
     while ((service = IOIteratorNext(iter)) != 0) {
@@ -175,18 +179,19 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
 
             /* Open briefly to read chip version and MAC address */
             if (rtl_open_device(entry) == 0) {
-                uint16_t tcr1 = rtl_ocp_read_word(entry, MCU_TYPE_PLA, PLA_TCR1);
-                entry->version_raw = tcr1 & VERSION_MASK;
-                entry->version_info = lookup_version_info(entry->version_raw);
-
-                uint32_t mac_l = rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR);
-                uint32_t mac_h = rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR + 4);
-                entry->mac_addr[0] = (uint8_t)(mac_l & 0xff);
-                entry->mac_addr[1] = (uint8_t)((mac_l >> 8) & 0xff);
-                entry->mac_addr[2] = (uint8_t)((mac_l >> 16) & 0xff);
-                entry->mac_addr[3] = (uint8_t)((mac_l >> 24) & 0xff);
-                entry->mac_addr[4] = (uint8_t)(mac_h & 0xff);
-                entry->mac_addr[5] = (uint8_t)((mac_h >> 8) & 0xff);
+                uint16_t tcr1;
+                uint32_t mac_l, mac_h;
+                entry->version_info = lookup_version_info(0);
+                if (rtl_ocp_read_word(entry, MCU_TYPE_PLA, PLA_TCR1, &tcr1) == 0) {
+                    entry->version_raw = tcr1 & VERSION_MASK;
+                    entry->version_info = lookup_version_info(entry->version_raw);
+                }
+                if (rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR, &mac_l) == 0 &&
+                    rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR + 4, &mac_h) == 0) {
+                    for (int i = 0; i < 4; i++) entry->mac_addr[i] = (uint8_t)(mac_l >> (i * 8));
+                    entry->mac_addr[4] = (uint8_t)mac_h;
+                    entry->mac_addr[5] = (uint8_t)(mac_h >> 8);
+                }
 
                 rtl_close_device(entry);
             } else {
@@ -234,11 +239,12 @@ rtl_dev_t *rtl_select_device(rtl_dev_t *devices, int count, const char *bsd_name
         return &devices[index];
     }
 
-    return &devices[0];
+    return index == -1 ? &devices[0] : NULL;
 }
 
 int rtl_ocp_read_block(rtl_dev_t *dev, uint16_t index, uint16_t size, void *data, uint16_t type) {
-    if (!dev || !dev->dev_interface || (index & 3) || (size & 3)) return -1;
+    if (!dev || !dev->dev_interface || !data || (index & 3) || (size & 3) ||
+        (uint32_t)index + size > 0x10000) return -1;
     uint8_t *ptr = (uint8_t *)data;
     uint16_t rem = size, off = index;
     while (rem > 0) {
@@ -252,14 +258,19 @@ int rtl_ocp_read_block(rtl_dev_t *dev, uint16_t index, uint16_t size, void *data
             .pData = ptr
         };
         IOReturn ret = (*dev->dev_interface)->DeviceRequest(dev->dev_interface, &req);
-        if (ret != kIOReturnSuccess) return -1;
+        if (ret != kIOReturnSuccess || req.wLenDone != chunk) {
+            fprintf(stderr, "Error: USB register transfer at 0x%04x failed (0x%08x, %u/%u bytes).\n",
+                    off, (unsigned)ret, (unsigned)req.wLenDone, chunk);
+            return -1;
+        }
         rem -= chunk; off += chunk; ptr += chunk;
     }
     return 0;
 }
 
 int rtl_ocp_write_block(rtl_dev_t *dev, uint16_t index, uint16_t byteen, uint16_t size, void *data, uint16_t type) {
-    if (!dev || !dev->dev_interface || (index & 3) || (size & 3)) return -1;
+    if (!dev || !dev->dev_interface || !data || (index & 3) || (size & 3) ||
+        (uint32_t)index + size > 0x10000) return -1;
     uint8_t *ptr = (uint8_t *)data;
     uint16_t rem = size, off = index;
     while (rem > 0) {
@@ -273,30 +284,35 @@ int rtl_ocp_write_block(rtl_dev_t *dev, uint16_t index, uint16_t byteen, uint16_
             .pData = ptr
         };
         IOReturn ret = (*dev->dev_interface)->DeviceRequest(dev->dev_interface, &req);
-        if (ret != kIOReturnSuccess) return -1;
+        if (ret != kIOReturnSuccess || req.wLenDone != chunk) {
+            fprintf(stderr, "Error: USB register transfer at 0x%04x failed (0x%08x, %u/%u bytes).\n",
+                    off, (unsigned)ret, (unsigned)req.wLenDone, chunk);
+            return -1;
+        }
         rem -= chunk; off += chunk; ptr += chunk;
     }
     return 0;
 }
 
-uint32_t rtl_ocp_read_dword(rtl_dev_t *dev, uint16_t type, uint16_t index) {
-    uint32_t data = 0;
-    if (rtl_ocp_read_block(dev, index & ~3, 4, &data, type) != 0) {
-        return 0xffffffff;
-    }
-    return CFSwapInt32LittleToHost(data);
+int rtl_ocp_read_dword(rtl_dev_t *dev, uint16_t type, uint16_t index, uint32_t *out) {
+    uint32_t data;
+    if (!out || rtl_ocp_read_block(dev, index & ~3, 4, &data, type) != 0) return -1;
+    *out = CFSwapInt32LittleToHost(data);
+    return 0;
 }
 
-uint16_t rtl_ocp_read_word(rtl_dev_t *dev, uint16_t type, uint16_t index) {
-    uint32_t data = rtl_ocp_read_dword(dev, type, index & ~3);
-    uint8_t shift = (index & 2) * 8;
-    return (uint16_t)((data >> shift) & 0xffff);
+int rtl_ocp_read_word(rtl_dev_t *dev, uint16_t type, uint16_t index, uint16_t *out) {
+    uint32_t data;
+    if (!out || rtl_ocp_read_dword(dev, type, index & ~3, &data) != 0) return -1;
+    *out = (uint16_t)(data >> ((index & 2) * 8));
+    return 0;
 }
 
-uint8_t rtl_ocp_read_byte(rtl_dev_t *dev, uint16_t type, uint16_t index) {
-    uint32_t data = rtl_ocp_read_dword(dev, type, index & ~3);
-    uint8_t shift = (index & 3) * 8;
-    return (uint8_t)((data >> shift) & 0xff);
+int rtl_ocp_read_byte(rtl_dev_t *dev, uint16_t type, uint16_t index, uint8_t *out) {
+    uint32_t data;
+    if (!out || rtl_ocp_read_dword(dev, type, index & ~3, &data) != 0) return -1;
+    *out = (uint8_t)(data >> ((index & 3) * 8));
+    return 0;
 }
 
 int rtl_ocp_write_dword(rtl_dev_t *dev, uint16_t type, uint16_t index, uint32_t data) {
@@ -329,28 +345,31 @@ int rtl_ocp_write_byte(rtl_dev_t *dev, uint16_t type, uint16_t index, uint8_t da
     return rtl_ocp_write_block(dev, index & ~3, byen, 4, &val, type);
 }
 
-uint16_t rtl_ocp_reg_read(rtl_dev_t *dev, uint16_t addr) {
-    uint16_t ocp_base = addr & 0xf000;
-    if (ocp_base != dev->ocp_base) {
-        rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_OCP_GPHY_BASE, ocp_base);
-        dev->ocp_base = ocp_base;
+static int rtl_select_ocp_page(rtl_dev_t *dev, uint16_t addr) {
+    if (!dev) return -1;
+    uint16_t base = addr & 0xf000;
+    if (base != dev->ocp_base) {
+        if (rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_OCP_GPHY_BASE, base) != 0) {
+            dev->ocp_base = 0xffff;
+            return -1;
+        }
+        dev->ocp_base = base;
     }
-    uint16_t ocp_index = (addr & 0x0fff) | 0xb000;
-    return rtl_ocp_read_word(dev, MCU_TYPE_PLA, ocp_index);
+    return 0;
+}
+
+int rtl_ocp_reg_read(rtl_dev_t *dev, uint16_t addr, uint16_t *out) {
+    if (!out || rtl_select_ocp_page(dev, addr) != 0) return -1;
+    return rtl_ocp_read_word(dev, MCU_TYPE_PLA, (addr & 0x0fff) | 0xb000, out);
 }
 
 int rtl_ocp_reg_write(rtl_dev_t *dev, uint16_t addr, uint16_t data) {
-    uint16_t ocp_base = addr & 0xf000;
-    if (ocp_base != dev->ocp_base) {
-        rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_OCP_GPHY_BASE, ocp_base);
-        dev->ocp_base = ocp_base;
-    }
-    uint16_t ocp_index = (addr & 0x0fff) | 0xb000;
-    return rtl_ocp_write_word(dev, MCU_TYPE_PLA, ocp_index, data);
+    if (rtl_select_ocp_page(dev, addr) != 0) return -1;
+    return rtl_ocp_write_word(dev, MCU_TYPE_PLA, (addr & 0x0fff) | 0xb000, data);
 }
 
-uint16_t rtl_mdio_read(rtl_dev_t *dev, uint32_t reg_addr) {
-    return rtl_ocp_reg_read(dev, (uint16_t)(OCP_BASE_MII + reg_addr * 2));
+int rtl_mdio_read(rtl_dev_t *dev, uint32_t reg_addr, uint16_t *out) {
+    return rtl_ocp_reg_read(dev, (uint16_t)(OCP_BASE_MII + reg_addr * 2), out);
 }
 
 int rtl_mdio_write(rtl_dev_t *dev, uint32_t reg_addr, uint16_t data) {

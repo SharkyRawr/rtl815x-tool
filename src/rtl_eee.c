@@ -2,20 +2,26 @@
 #include <stdio.h>
 #include <unistd.h>
 
-void rtl_eee_print_status(rtl_dev_t *dev) {
-    if (!dev) return;
+int rtl_eee_print_status(rtl_dev_t *dev) {
+    if (!dev) return -1;
 
     if (rtl_open_device(dev) != 0) {
         fprintf(stderr, "Error: Failed to open USB device %04x:%04x\n", dev->vid, dev->pid);
-        return;
+        return -1;
     }
 
-    uint16_t pla_eee_cr = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_EEE_CR);
-    uint16_t ocp_eee_cfg = rtl_ocp_reg_read(dev, OCP_EEE_CFG);
-    uint16_t ocp_eee_adv = rtl_ocp_reg_read(dev, OCP_EEE_ADV);
-    uint16_t ocp_eee_adv2 = rtl_ocp_reg_read(dev, OCP_EEE_ADV2);
-    uint16_t ocp_eee_lp = rtl_ocp_reg_read(dev, OCP_EEE_LPABLE);
-    uint16_t ocp_eee_lp2 = rtl_ocp_reg_read(dev, OCP_EEE_LPABLE2);
+    uint16_t pla_eee_cr;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, &pla_eee_cr) != 0) return -1;
+    uint16_t ocp_eee_cfg;
+    if (rtl_ocp_reg_read(dev, OCP_EEE_CFG, &ocp_eee_cfg) != 0) return -1;
+    uint16_t ocp_eee_adv;
+    if (rtl_ocp_reg_read(dev, OCP_EEE_ADV, &ocp_eee_adv) != 0) return -1;
+    uint16_t ocp_eee_adv2;
+    if (rtl_ocp_reg_read(dev, OCP_EEE_ADV2, &ocp_eee_adv2) != 0) return -1;
+    uint16_t ocp_eee_lp;
+    if (rtl_ocp_reg_read(dev, OCP_EEE_LPABLE, &ocp_eee_lp) != 0) return -1;
+    uint16_t ocp_eee_lp2;
+    if (rtl_ocp_reg_read(dev, OCP_EEE_LPABLE2, &ocp_eee_lp2) != 0) return -1;
 
     bool tx_eee = (pla_eee_cr & EEE_TX_EN) != 0;
     bool rx_eee = (pla_eee_cr & EEE_RX_EN) != 0;
@@ -55,6 +61,7 @@ void rtl_eee_print_status(rtl_dev_t *dev) {
         printf("   \033[1;32m[✓] EEE is fully disabled.\033[0m Maximum throughput and minimum jitter.\n");
     }
     printf("=================================================================\n\n");
+    return 0;
 }
 
 int rtl_eee_set(rtl_dev_t *dev, bool enable) {
@@ -67,44 +74,49 @@ int rtl_eee_set(rtl_dev_t *dev, bool enable) {
 
     if (!enable) {
         /* Disable PLA EEE Control */
-        uint16_t pla_cr = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_EEE_CR);
+        uint16_t pla_cr;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, &pla_cr) != 0) return -1;
         pla_cr &= (uint16_t)~(EEE_TX_EN | EEE_RX_EN);
-        rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, pla_cr);
+        if (rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, pla_cr) != 0) return -1;
 
         /* Clear 100M/1G EEE Advertisements */
-        rtl_ocp_reg_write(dev, OCP_EEE_ADV, 0x0000);
+        if (rtl_ocp_reg_write(dev, OCP_EEE_ADV, 0x0000) != 0) return -1;
 
         /* Clear 2.5G/5G EEE Advertisements */
-        rtl_ocp_reg_write(dev, OCP_EEE_ADV2, 0x0000);
+        if (rtl_ocp_reg_write(dev, OCP_EEE_ADV2, 0x0000) != 0) return -1;
 
         /* Clear EEE config flags */
-        uint16_t cfg = rtl_ocp_reg_read(dev, OCP_EEE_CFG);
+        uint16_t cfg;
+        if (rtl_ocp_reg_read(dev, OCP_EEE_CFG, &cfg) != 0) return -1;
         cfg &= (uint16_t)~0x2000; /* Disable EEE_10_CAP */
-        rtl_ocp_reg_write(dev, OCP_EEE_CFG, cfg);
+        if (rtl_ocp_reg_write(dev, OCP_EEE_CFG, cfg) != 0) return -1;
     } else {
         /* Enable PLA EEE Control */
-        uint16_t pla_cr = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_EEE_CR);
+        uint16_t pla_cr;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, &pla_cr) != 0) return -1;
         pla_cr |= (EEE_TX_EN | EEE_RX_EN);
-        rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, pla_cr);
+        if (rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_EEE_CR, pla_cr) != 0) return -1;
 
         /* Enable 100M/1G EEE */
-        rtl_ocp_reg_write(dev, OCP_EEE_ADV, 0x0006);
+        if (rtl_ocp_reg_write(dev, OCP_EEE_ADV, 0x0006) != 0) return -1;
 
         /* Enable 2.5G EEE if 2.5G or 5G capable */
         if (dev->version_info->max_speed_mbps >= 2500) {
-            rtl_ocp_reg_write(dev, OCP_EEE_ADV2, 0x0001);
+            if (rtl_ocp_reg_write(dev, OCP_EEE_ADV2, 0x0001) != 0) return -1;
         }
     }
 
     /* Restart PHY Auto-Negotiation so link partner receives updated abilities */
     printf("[*] Restarting PHY Auto-Negotiation to apply changes...\n");
-    uint16_t bmcr = rtl_mdio_read(dev, MII_BMCR);
+    uint16_t bmcr;
+    if (rtl_mdio_read(dev, MII_BMCR, &bmcr) != 0) return -1;
     bmcr |= (BMCR_ANENABLE | BMCR_ANRESTART);
-    rtl_mdio_write(dev, MII_BMCR, bmcr);
+    if (rtl_mdio_write(dev, MII_BMCR, bmcr) != 0) return -1;
 
     for (int i = 0; i < 20; i++) {
         usleep(100000);
-        uint16_t bmsr = rtl_mdio_read(dev, MII_BMSR);
+        uint16_t bmsr;
+        if (rtl_mdio_read(dev, MII_BMSR, &bmsr) != 0) return -1;
         if ((bmsr & BMSR_LSTATUS) && (bmsr & BMSR_ANEGCOMPLETE)) {
             printf("[+] Link re-established! EEE is now %s.\n", enable ? "ENABLED" : "DISABLED");
             return 0;

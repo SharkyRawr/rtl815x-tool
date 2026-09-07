@@ -1,18 +1,22 @@
 #include "rtl_power.h"
 #include <stdio.h>
 
-void rtl_power_print_status(rtl_dev_t *dev) {
-    if (!dev) return;
+int rtl_power_print_status(rtl_dev_t *dev) {
+    if (!dev) return -1;
 
     if (rtl_open_device(dev) != 0) {
         fprintf(stderr, "Error: Failed to open USB device %04x:%04x\n", dev->vid, dev->pid);
-        return;
+        return -1;
     }
 
-    uint16_t dev_stat = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_DEV_STAT);
-    uint16_t ups_ctrl = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_UPS_CTRL);
-    uint16_t lpm_ctrl = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_LPM_CTRL);
-    uint16_t mac_pwr = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL);
+    uint16_t dev_stat;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_DEV_STAT, &dev_stat) != 0) return -1;
+    uint16_t ups_ctrl;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, &ups_ctrl) != 0) return -1;
+    uint16_t lpm_ctrl;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, &lpm_ctrl) != 0) return -1;
+    uint16_t mac_pwr;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL, &mac_pwr) != 0) return -1;
 
     printf("\n=================================================================\n");
     printf(" USB & Ethernet Power Management State\n");
@@ -35,6 +39,7 @@ void rtl_power_print_status(rtl_dev_t *dev) {
         printf("   \033[1;32m[✓] Adapter configured for continuous active power.\033[0m\n");
     }
     printf("=================================================================\n\n");
+    return 0;
 }
 
 int rtl_power_set_no_sleep(rtl_dev_t *dev, bool disable_sleep) {
@@ -46,25 +51,29 @@ int rtl_power_set_no_sleep(rtl_dev_t *dev, bool disable_sleep) {
 
     if (disable_sleep) {
         /* Disable UPS (Ultra Power Saving) */
-        uint16_t ups = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_UPS_CTRL);
+        uint16_t ups;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, &ups) != 0) return -1;
         ups &= (uint16_t)~0x0001;
-        rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, ups);
+        if (rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, ups) != 0) return -1;
 
         /* Disable USB LPM L1 transitions */
-        uint16_t lpm = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_LPM_CTRL);
+        uint16_t lpm;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, &lpm) != 0) return -1;
         lpm &= (uint16_t)~0x0001;
-        rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, lpm);
+        if (rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, lpm) != 0) return -1;
 
         printf("[+] High-performance power mode configured. Aggressive USB sleep disabled.\n");
     } else {
         /* Re-enable defaults */
-        uint16_t ups = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_UPS_CTRL);
+        uint16_t ups;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, &ups) != 0) return -1;
         ups |= 0x0001;
-        rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, ups);
+        if (rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_UPS_CTRL, ups) != 0) return -1;
 
-        uint16_t lpm = rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_LPM_CTRL);
+        uint16_t lpm;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, &lpm) != 0) return -1;
         lpm |= 0x0001;
-        rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, lpm);
+        if (rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_LPM_CTRL, lpm) != 0) return -1;
 
         printf("[+] Default power saving mode re-enabled.\n");
     }

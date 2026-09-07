@@ -42,7 +42,7 @@
 
 #define PLA_TXFIFO_CTRL         0xe618
 #define PLA_TXFIFO_FULL         0xe61a
-#define PLA_PHY_STATUS          0xe608   /* Link status and speed */
+#define PLA_PHY_STATUS          0xe908   /* Link status and speed */
 #define PLA_TCR0                0xe610   /* Transmit Configuration Register 0 */
 #define PLA_TCR1                0xe612   /* Transmit Configuration Register 1 (Chip Version) */
 #define PLA_MTPS                0x001c   /* Max Tx Packet Size */
@@ -128,8 +128,21 @@
 #define BMSR_ERCAP              0x0001
 
 /* Multi-Gigabit (2.5G/5G) OCP Registers */
-#define OCP_2500_CTRL           0xa412   /* 2.5G Control (0x0200 = 2.5G Adv) */
-#define OCP_2500_STAT           0xa414   /* 2.5G Status (0x0800 = Partner 2.5G Capable, 0x0200 = Resolved) */
+#define OCP_2500_CTRL           0xa5d4   /* MDIO AN 10GBT control */
+#define OCP_2500_STAT           0xa5d6   /* MDIO AN 10GBT status */
+
+/* Linux r8152.c PLA_PHYSTATUS and IEEE MDIO AN 10GBT capability bits. */
+#define PHY_STAT_FULL_DUPLEX   0x0001
+#define PHY_STAT_LINK          0x0002
+#define PHY_STAT_10            0x0004
+#define PHY_STAT_100           0x0008
+#define PHY_STAT_1000          0x0010
+#define PHY_STAT_2500          0x0400
+#define PHY_STAT_5000          0x1000
+#define ADV_2500_FULL          0x0080
+#define ADV_5000_FULL          0x0100
+#define LP_2500_FULL           0x0020
+#define LP_5000_FULL           0x0040
 
 /* Energy Efficient Ethernet (EEE) Registers */
 #define OCP_EEE_CFG             0xa430

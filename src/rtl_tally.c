@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <time.h>
+#include <math.h>
+#include <errno.h>
 
 static volatile sig_atomic_t g_keep_running = 1;
 
@@ -45,18 +47,18 @@ int rtl_tally_reset(rtl_dev_t *dev) {
 
     printf("[*] Resetting hardware tally counters on %s (%s)...\n", dev->version_info->name, dev->bsd_name);
     /* Writing 0x0001 to PLA_RSTTALLY clears on-chip statistics registers */
-    rtl_ocp_write_dword(dev, MCU_TYPE_PLA, PLA_RSTTALLY, 0x00000001);
+    if (rtl_ocp_write_dword(dev, MCU_TYPE_PLA, PLA_RSTTALLY, 0x00000001) != 0) return -1;
     printf("[+] Hardware counters successfully reset to 0.\n");
     return 0;
 }
 
-void rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
-    if (!dev) return;
+int rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
+    if (!dev) return -1;
 
     rtl_tally_counters_t c;
     if (rtl_tally_read(dev, &c) != 0) {
         fprintf(stderr, "Error: Failed to read hardware tally counters\n");
-        return;
+        return -1;
     }
 
     if (json_format) {
@@ -87,7 +89,7 @@ void rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
         printf("    \"tx_underrun\": %u\n", c.tx_underrun);
         printf("  }\n");
         printf("}\n");
-        return;
+        return 0;
     }
 
     printf("\n=================================================================\n");
@@ -115,11 +117,13 @@ void rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
     printf("   TX Aborted           : %u\n", c.tx_aborted);
     printf("   TX Underrun          : %u\n", c.tx_underrun);
     printf("=================================================================\n\n");
+    return 0;
 }
 
-void rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
-    if (!dev) return;
-    if (interval_sec < 0.2) interval_sec = 1.0;
+int rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
+    if (!dev) return -1;
+    if (!isfinite(interval_sec) || interval_sec < 0.2 || interval_sec > 3600.0) return -1;
+    g_keep_running = 1;
 
     signal(SIGINT, sigint_handler);
     signal(SIGTERM, sigint_handler);
@@ -127,17 +131,26 @@ void rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
     rtl_tally_counters_t prev, curr;
     if (rtl_tally_read(dev, &prev) != 0) {
         fprintf(stderr, "Error: Failed initial read of tally counters\n");
-        return;
+        return -1;
     }
 
-    useconds_t sleep_us = (useconds_t)(interval_sec * 1000000.0);
+    struct timespec delay = {
+        .tv_sec = (time_t)interval_sec,
+        .tv_nsec = (long)((interval_sec - (time_t)interval_sec) * 1000000000.0)
+    };
+    int result = 0;
 
     /* Hide cursor and clear screen */
     printf("\033[?25l\033[2J\033[H");
 
     while (g_keep_running) {
-        usleep(sleep_us);
-        if (rtl_tally_read(dev, &curr) != 0) break;
+        struct timespec remaining = delay;
+        while (nanosleep(&remaining, &remaining) != 0) {
+            if (errno != EINTR) { result = -1; goto done; }
+            if (!g_keep_running) goto done;
+        }
+        if (!g_keep_running) break;
+        if (rtl_tally_read(dev, &curr) != 0) { result = -1; break; }
 
         uint64_t d_tx_pkt = curr.tx_packets - prev.tx_packets;
         uint64_t d_rx_pkt = curr.rx_packets - prev.rx_packets;
@@ -152,8 +165,10 @@ void rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
         double tx_pps = (double)d_tx_pkt / interval_sec;
         double rx_pps = (double)d_rx_pkt / interval_sec;
 
-        rtl_mdio_read(dev, MII_BMSR);
-        uint16_t bmsr = rtl_mdio_read(dev, MII_BMSR);
+        uint16_t latched_bmsr;
+        if (rtl_mdio_read(dev, MII_BMSR, &latched_bmsr) != 0) { result = -1; break; }
+        uint16_t bmsr;
+        if (rtl_mdio_read(dev, MII_BMSR, &bmsr) != 0) { result = -1; break; }
         bool link_up = (bmsr & BMSR_LSTATUS) != 0;
 
         time_t now = time(NULL);
@@ -191,6 +206,9 @@ void rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
         prev = curr;
     }
 
+done:
     /* Restore cursor */
-    printf("\033[?25h\n[+] Live monitor stopped.\n");
+    printf("\033[?25h\n");
+    if (result == 0) printf("[+] Live monitor stopped.\n");
+    return result;
 }

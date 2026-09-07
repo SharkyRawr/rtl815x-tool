@@ -3,16 +3,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-void rtl_led_print_status(rtl_dev_t *dev) {
-    if (!dev) return;
+int rtl_led_print_status(rtl_dev_t *dev) {
+    if (!dev) return -1;
 
     if (rtl_open_device(dev) != 0) {
         fprintf(stderr, "Error: Failed to open USB device %04x:%04x\n", dev->vid, dev->pid);
-        return;
+        return -1;
     }
 
-    uint16_t ledsel = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_LEDSEL);
-    uint16_t ledfeat = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_LED_FEATURE);
+    uint16_t ledsel;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_LEDSEL, &ledsel) != 0) return -1;
+    uint16_t ledfeat;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_LED_FEATURE, &ledfeat) != 0) return -1;
 
     printf("\n=================================================================\n");
     printf(" Realtek LED Configuration\n");
@@ -29,6 +31,7 @@ void rtl_led_print_status(rtl_dev_t *dev) {
     printf("   off           : Turn off all adapter LEDs (0x0000)\n");
     printf("   0x<hex>       : Direct custom 16-bit register value\n");
     printf("=================================================================\n\n");
+    return 0;
 }
 
 int rtl_led_set_mode(rtl_dev_t *dev, const char *mode) {
@@ -52,7 +55,7 @@ int rtl_led_set_mode(rtl_dev_t *dev, const char *mode) {
     }
 
     printf("[*] Setting LED configuration to 0x%04x on %s (%s)...\n", val, dev->version_info->name, dev->bsd_name);
-    rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_LEDSEL, val);
+    if (rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_LEDSEL, val) != 0) return -1;
     printf("[+] LED mode updated.\n");
     return 0;
 }

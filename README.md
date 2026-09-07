@@ -76,6 +76,20 @@ This builds and installs `rtl815x-tool` into `/usr/local/bin`.
 
 ---
 
+## Validation and error handling
+
+Run `make test` on macOS to exercise the CLI and register access with a mock USB
+endpoint under AddressSanitizer and UndefinedBehaviorSanitizer. The tests cover
+device selection, failed and short USB transfers, write error propagation,
+resolved link speeds, and watch intervals without changing a connected adapter.
+
+Commands return a nonzero exit status on USB failures. Register operations stop
+at the first failure; a command that already performed some writes can leave
+partial changes applied. Invalid explicit device indices are rejected.
+
+`watch -n 5`, `watch --interval 5`, `watch 5`, and `-n 5 watch` all select a
+five-second interval. Intervals must be finite and between 0.2 and 3600 seconds.
+
 ## Usage & CLI Reference
 
 ### 1. View Adapter Status
