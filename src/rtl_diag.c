@@ -2,6 +2,20 @@
 #include <stdio.h>
 #include <unistd.h>
 
+static const char *pause_advertisement(uint16_t advertisement) {
+    switch (advertisement & 0x0c00) {
+        case 0x0400: return "symmetric";
+        case 0x0800: return "asymmetric";
+        case 0x0c00: return "symmetric and asymmetric";
+        default: return "none";
+    }
+}
+
+static const char *advertised(bool known, bool bit_set) {
+    if (!known) return "dont know";
+    return bit_set ? "Yes" : "No";
+}
+
 int rtl_diag_print_status(rtl_dev_t *dev) {
     if (!dev) return -1;
 
@@ -64,9 +78,8 @@ int rtl_diag_print_status(rtl_dev_t *dev) {
     printf("   Duplex Mode      : %s\n", duplex_str);
     printf("   Auto-Negotiation : %s\n", an_complete ? "Completed" : "Incomplete");
 
-    bool sym_pause = (adv & 0x0400) && (lpa & 0x0400);
-    bool asym_pause = (adv & 0x0800) && (lpa & 0x0800);
-    printf("   Flow Control     : %s\n", sym_pause ? "Symmetric Pause (RX & TX)" : (asym_pause ? "Asymmetric Pause" : "Disabled / None"));
+    printf("   Pause advertised : local %s, partner %s\n", pause_advertisement(adv),
+           link_up && an_complete ? pause_advertisement(lpa) : "dont know");
 
     bool eee_active = (eee_cr & (EEE_TX_EN | EEE_RX_EN)) != 0;
     printf("   Energy Eff. Eth. : %s\n", eee_active ? "Enabled" : "Disabled");
@@ -109,7 +122,9 @@ int rtl_diag_print_phy(rtl_dev_t *dev) {
     uint16_t giga_stat;
     if (rtl_mdio_read(dev, MII_STAT1000, &giga_stat) != 0) return -1;
     uint16_t mg_ctrl = 0, mg_stat = 0;
-    if (dev->version_info->max_speed_mbps >= 2500 &&
+    bool multi_gig_read = dev->version_info->max_speed_mbps >= 2500;
+    bool peer_known = (bmsr & BMSR_LSTATUS) && (bmsr & BMSR_ANEGCOMPLETE);
+    if (multi_gig_read &&
         (rtl_ocp_reg_read(dev, OCP_2500_CTRL, &mg_ctrl) != 0 ||
          rtl_ocp_reg_read(dev, OCP_2500_STAT, &mg_stat) != 0)) return -1;
 
@@ -117,7 +132,7 @@ int rtl_diag_print_phy(rtl_dev_t *dev) {
     printf(" Realtek PHY & MDIO Diagnostic Report (%s)\n", dev->version_info->name);
     printf("=================================================================\n");
     printf(" PHY Hardware Identifier:\n");
-    printf("   OUI / Model / Rev: 0x%04x:0x%04x (Realtek Integrated GPHY)\n", phyid1, phyid2);
+    printf("   PHY ID registers : 0x%04x:0x%04x\n", phyid1, phyid2);
     printf("   BMCR (0x00)      : 0x%04x (AutoNeg: %s, Duplex: %s, Loopback: %s)\n",
            bmcr,
            (bmcr & BMCR_ANENABLE) ? "Enabled" : "Disabled",
@@ -129,39 +144,39 @@ int rtl_diag_print_phy(rtl_dev_t *dev) {
            (bmsr & BMSR_ANEGCOMPLETE) ? "Yes" : "No",
            (bmsr & BMSR_ESTATEN) ? "Yes" : "No");
 
-    printf("\n Auto-Negotiation Capability Matrix:\n");
-    printf("   %-22s | %-16s | %-16s\n", "Speed / Technology", "Local Adapter", "Link Partner (Switch)");
+    printf("\n Auto-Negotiation Advertisements:\n");
+    printf("   %-22s | %-16s | %-16s\n", "Speed / Technology", "Local Adapter", "Link Partner");
     printf("  ------------------------+------------------+-------------------\n");
     printf("   %-22s | %-16s | %-16s\n", "5GBASE-T Full",
-           (mg_ctrl & ADV_5000_FULL) ? "Supported" : "No",
-           (mg_stat & LP_5000_FULL) ? "Supported" : "No");
+           advertised(multi_gig_read, mg_ctrl & ADV_5000_FULL),
+           advertised(multi_gig_read && peer_known, mg_stat & LP_5000_FULL));
     printf("   %-22s | %-16s | %-16s\n", "2.5GBASE-T Full",
-           (mg_ctrl & ADV_2500_FULL) ? "\033[1;32mSupported\033[0m" : "No",
-           (mg_stat & LP_2500_FULL) ? "\033[1;32mSupported\033[0m" : "No");
+           advertised(multi_gig_read, mg_ctrl & ADV_2500_FULL),
+           advertised(multi_gig_read && peer_known, mg_stat & LP_2500_FULL));
     printf("   %-22s | %-16s | %-16s\n", "1000BASE-T Full",
-           (giga_ctrl & 0x0200) ? "Supported" : "No",
-           (giga_stat & 0x0800) ? "Supported" : "No");
+           advertised(true, giga_ctrl & 0x0200),
+           advertised(peer_known, giga_stat & 0x0800));
     printf("   %-22s | %-16s | %-16s\n", "1000BASE-T Half",
-           (giga_ctrl & 0x0100) ? "Supported" : "No",
-           (giga_stat & 0x0400) ? "Supported" : "No");
+           advertised(true, giga_ctrl & 0x0100),
+           advertised(peer_known, giga_stat & 0x0400));
     printf("   %-22s | %-16s | %-16s\n", "100BASE-TX Full",
-           (adv & 0x0100) ? "Supported" : "No",
-           (lpa & 0x0100) ? "Supported" : "No");
+           advertised(true, adv & 0x0100),
+           advertised(peer_known, lpa & 0x0100));
     printf("   %-22s | %-16s | %-16s\n", "100BASE-TX Half",
-           (adv & 0x0080) ? "Supported" : "No",
-           (lpa & 0x0080) ? "Supported" : "No");
+           advertised(true, adv & 0x0080),
+           advertised(peer_known, lpa & 0x0080));
     printf("   %-22s | %-16s | %-16s\n", "10BASE-T Full",
-           (adv & 0x0040) ? "Supported" : "No",
-           (lpa & 0x0040) ? "Supported" : "No");
+           advertised(true, adv & 0x0040),
+           advertised(peer_known, lpa & 0x0040));
     printf("   %-22s | %-16s | %-16s\n", "10BASE-T Half",
-           (adv & 0x0020) ? "Supported" : "No",
-           (lpa & 0x0020) ? "Supported" : "No");
+           advertised(true, adv & 0x0020),
+           advertised(peer_known, lpa & 0x0020));
     printf("   %-22s | %-16s | %-16s\n", "Symmetric Pause",
-           (adv & 0x0400) ? "Supported" : "No",
-           (lpa & 0x0400) ? "Supported" : "No");
+           advertised(true, adv & 0x0400),
+           advertised(peer_known, lpa & 0x0400));
     printf("   %-22s | %-16s | %-16s\n", "Asymmetric Pause",
-           (adv & 0x0800) ? "Supported" : "No",
-           (lpa & 0x0800) ? "Supported" : "No");
+           advertised(true, adv & 0x0800),
+           advertised(peer_known, lpa & 0x0800));
     printf("=================================================================\n\n");
     return 0;
 }
@@ -186,6 +201,6 @@ int rtl_diag_restart_an(rtl_dev_t *dev) {
             return 0;
         }
     }
-    printf("[!] Link re-negotiation still in progress.\n");
+    printf("[!] Timed out waiting for link-up and completed auto-negotiation.\n");
     return 0;
 }

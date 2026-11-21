@@ -22,7 +22,7 @@ The tool communicates directly with the controller's **On-Chip Peripheral (OCP)*
 
 * **Hardware & Link Overview (`status`):**
   * Auto-detects chipset revision, hardware eFUSE MAC address, USB link speed (SuperSpeed 5Gbps vs USB2 480Mbps), and assigned macOS BSD interface name (`en12`).
-  * Real-time PHY link status, negotiated speed (2.5 Gbps / 1 Gbps / 100M / 10M), duplex mode, and flow control (symmetric/asymmetric pause).
+  * Real-time PHY link status, negotiated speed (2.5 Gbps / 1 Gbps / 100M / 10M), duplex mode, and local/partner pause advertisements.
 * **Hardware Tally & Error Counters (`stats` / `--json`):**
   * Reads on-chip hardware counters directly from `PLA_TALLYCNT` (0xE890).
   * Tracks accurate TX/RX packet volume, RX Unicast, Multicast, and Broadcast distribution.
@@ -32,14 +32,14 @@ The tool communicates directly with the controller's **On-Chip Peripheral (OCP)*
   * Interactive fullscreen dashboard reporting real-time packets/sec (pps), delta traffic, and error rates.
 * **PHY & Auto-Negotiation Analysis (`phy`):**
   * Deep inspection of MII/MDIO registers (BMCR, BMSR, PHY ID, 1000Base-T, 2.5GBase-T).
-  * Side-by-side capability matrix comparing local adapter abilities vs link partner (switch) abilities.
+  * Side-by-side comparison of local and link partner advertisements. Unavailable values display as `dont know`.
   * On-demand PHY auto-negotiation restart (`--restart-an`) to re-sync link without unplugging.
 * **Energy Efficient Ethernet Tuning (`eee`):**
-  * Audit Low Power Idle (LPI) state and EEE advertisement across 100M, 1G, and 2.5G.
-  * Toggle EEE disable (`eee disable` / `eee enable`) to eliminate latency spikes and random 2.5G drops caused by macOS NCM power transitions.
+  * Inspect Low Power Idle (LPI) TX/RX configuration and EEE advertisement across 100M, 1G, and 2.5G.
+  * Change EEE configuration with `eee disable` or `eee enable`.
 * **Power Management Tuning (`power`):**
   * Inspect and configure USB Link Power Management (LPM L1) and Ultra Power Saving (UPS).
-  * High-performance continuous power mode (`power no-sleep`).
+  * Clear the UPS and LPM control bits with `power no-sleep`, or set them with `power default`.
 * **LED Pattern Customization (`led`):**
   * Configure on-adapter LEDs: standard, link-only (solid), activity-only (blink on transfer), stealth mode (all LEDs off), or custom bitmasks.
 * **Raw Register Access (`reg`):**
@@ -113,7 +113,7 @@ five-second interval. Intervals must be finite and between 0.2 and 3600 seconds.
    Negotiated Speed : 2.5 Gbps (2500BASE-T)
    Duplex Mode      : Full Duplex
    Auto-Negotiation : Completed
-   Flow Control     : Symmetric Pause (RX & TX)
+   Pause advertised : local symmetric and asymmetric, partner symmetric and asymmetric
    Energy Eff. Eth. : Disabled
 
  Controller Registers:
@@ -166,7 +166,7 @@ To reset the hardware tally counters to 0:
 ```
 Displays an in-place updating terminal dashboard tracking packet rates (pkt/s), unicast/multicast throughput, and real-time delta error counts.
 
-### 4. PHY Diagnostics & Capability Matrix
+### 4. PHY Diagnostics & Advertisements
 ```bash
 ./rtl815x-tool phy
 ```
@@ -175,22 +175,23 @@ Displays an in-place updating terminal dashboard tracking packet rates (pkt/s), 
  Realtek PHY & MDIO Diagnostic Report (RTL8156B)
 =================================================================
  PHY Hardware Identifier:
-   OUI / Model / Rev: 0x001c:0xc840 (Realtek Integrated GPHY)
+   PHY ID registers : 0x001c:0xc840
    BMCR (0x00)      : 0x1000 (AutoNeg: Enabled, Duplex: Half, Loopback: No)
    BMSR (0x01)      : 0x79ad (Link: UP, AutoNeg Done: Yes, Extended Cap: Yes)
 
- Auto-Negotiation Capability Matrix:
-   Speed / Technology     | Local Adapter    | Link Partner (Switch)
+ Auto-Negotiation Advertisements:
+   Speed / Technology     | Local Adapter    | Link Partner
   ------------------------+------------------+-------------------
-   2.5GBASE-T Full        | Supported        | Supported
-   1000BASE-T Full        | Supported        | Supported
+   5GBASE-T Full          | No               | No
+   2.5GBASE-T Full        | Yes              | Yes
+   1000BASE-T Full        | Yes              | Yes
    1000BASE-T Half        | No               | No
-   100BASE-TX Full        | Supported        | Supported
-   100BASE-TX Half        | Supported        | Supported
-   10BASE-T Full          | Supported        | Supported
-   10BASE-T Half          | Supported        | Supported
-   Symmetric Pause        | Supported        | Supported
-   Asymmetric Pause       | Supported        | Supported
+   100BASE-TX Full        | Yes              | Yes
+   100BASE-TX Half        | Yes              | Yes
+   10BASE-T Full          | Yes              | Yes
+   10BASE-T Half          | Yes              | Yes
+   Symmetric Pause        | Yes              | Yes
+   Asymmetric Pause       | Yes              | Yes
 =================================================================
 ```
 
@@ -199,15 +200,13 @@ To force PHY auto-negotiation restart:
 ./rtl815x-tool phy --restart-an
 ```
 
-### 5. Fixing Connection Drops: Energy Efficient Ethernet (EEE)
-On macOS, adapters operating under `AppleUSBNCMData` can experience random latency spikes, packet jitter, or 2.5G fallbacks to 1G when entering and exiting Low Power Idle (LPI) states.
-
-To check EEE state:
+### 5. Energy Efficient Ethernet (EEE)
+To check TX/RX configuration and advertised EEE modes:
 ```bash
 ./rtl815x-tool eee status
 ```
 
-To permanently disable EEE across all link speeds:
+To disable EEE:
 ```bash
 ./rtl815x-tool eee disable
 ```
@@ -228,7 +227,7 @@ To re-enable EEE:
 # Solid link LED only (no activity blinking)
 ./rtl815x-tool led set link-only
 
-# Restore default blinking behavior
+# Apply the tool’s default LED preset
 ./rtl815x-tool led set default
 ```
 

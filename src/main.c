@@ -13,7 +13,7 @@
 #include "rtl_led.h"
 
 static void print_usage(const char *progname) {
-    printf("Realtek RTL8156 / RTL815x macOS Diagnostics & Control CLI (v1.0.2)\n\n");
+    printf("Realtek RTL8156 / RTL815x macOS Diagnostics & Control CLI (v1.0.3)\n\n");
     printf("Usage:\n");
     printf("  %s [options] <command> [arguments]\n\n", progname);
     printf("Commands:\n");
@@ -23,8 +23,8 @@ static void print_usage(const char *progname) {
     printf("  tally-reset                 Reset hardware traffic and error counters to zero\n");
     printf("  watch, monitor [-n <sec>]   Live terminal dashboard showing real-time pps & error deltas\n");
     printf("  phy [--restart-an]          Detailed MII/PHY register dump and auto-negotiation matrix\n");
-    printf("  eee [status|disable|enable] Inspect or toggle Energy Efficient Ethernet (fixes latency/drops)\n");
-    printf("  power [status|no-sleep]     Inspect or configure USB LPM / UPS continuous power mode\n");
+    printf("  eee [status|disable|enable] Inspect or toggle Energy Efficient Ethernet\n");
+    printf("  power [status|no-sleep|default] Inspect or clear/set USB LPM and UPS controls\n");
     printf("  led [status|set <mode>]     Inspect or customize LED blink patterns (default, off, link-only)\n");
     printf("  reg read <mcu> <addr>       Directly read register (mcu: pla | usb | phy)\n");
     printf("  reg write <mcu> <addr> <val> [size] Directly write register (size: 8, 16, 32)\n");
@@ -38,7 +38,7 @@ static void print_usage(const char *progname) {
     printf("  %s status                   # Diagnostic overview of first connected adapter\n", progname);
     printf("  %s stats --json             # Output hardware error counters in JSON\n", progname);
     printf("  %s watch -n 1.0             # Live packet and drop monitor\n", progname);
-    printf("  %s eee disable              # Disable EEE to prevent sleep drops & latency spikes\n", progname);
+    printf("  %s eee disable              # Disable EEE\n", progname);
     printf("  %s led set off              # Turn off adapter LEDs (stealth mode)\n", progname);
 }
 
@@ -255,7 +255,11 @@ int main(int argc, char *argv[]) {
 
     rtl_dev_t *devices = NULL;
     int dev_count = 0;
-    if (rtl_find_devices(&devices, &dev_count) != 0 || dev_count == 0) {
+    if (rtl_find_devices(&devices, &dev_count) != 0) {
+        fprintf(stderr, "Failed to enumerate USB adapters.\n");
+        return 1;
+    }
+    if (dev_count == 0) {
         fprintf(stderr, "No supported Realtek USB Ethernet adapters detected.\n");
         rtl_free_devices(devices, dev_count);
         return 1;

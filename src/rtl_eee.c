@@ -23,6 +23,12 @@ int rtl_eee_print_status(rtl_dev_t *dev) {
     uint16_t ocp_eee_lp2;
     if (rtl_ocp_reg_read(dev, OCP_EEE_LPABLE2, &ocp_eee_lp2) != 0) return -1;
 
+    uint16_t bmsr;
+    /* Link status latches low until read. */
+    if (rtl_mdio_read(dev, MII_BMSR, &bmsr) != 0 ||
+        rtl_mdio_read(dev, MII_BMSR, &bmsr) != 0) return -1;
+    bool peer_known = (bmsr & BMSR_LSTATUS) && (bmsr & BMSR_ANEGCOMPLETE);
+
     bool tx_eee = (pla_eee_cr & EEE_TX_EN) != 0;
     bool rx_eee = (pla_eee_cr & EEE_RX_EN) != 0;
 
@@ -30,36 +36,28 @@ int rtl_eee_print_status(rtl_dev_t *dev) {
     printf(" Energy Efficient Ethernet (EEE / IEEE 802.3az) Report\n");
     printf(" Adapter: %s (%s, %s)\n", dev->version_info->name, dev->bsd_name, dev->product_name);
     printf("=================================================================\n");
-    printf(" Controller State:\n");
-    printf("   Low Power Idle (LPI) TX : %s\n", tx_eee ? "\033[1;33mEnabled (Power saving active)\033[0m" : "\033[1;32mDisabled (Low latency)\033[0m");
-    printf("   Low Power Idle (LPI) RX : %s\n", rx_eee ? "\033[1;33mEnabled (Power saving active)\033[0m" : "\033[1;32mDisabled (Low latency)\033[0m");
+    printf(" Controller Configuration:\n");
+    printf("   Low Power Idle (LPI) TX : %s\n", tx_eee ? "Enabled" : "Disabled");
+    printf("   Low Power Idle (LPI) RX : %s\n", rx_eee ? "Enabled" : "Disabled");
     printf("   PLA_EEE_CR (0xE040)     : 0x%04x\n", pla_eee_cr);
     printf("   OCP_EEE_CFG (0xA430)    : 0x%04x\n", ocp_eee_cfg);
 
     printf("\n EEE Advertisement Matrix:\n");
-    printf("   %-22s | %-16s | %-16s\n", "Speed / Link Standard", "Local Advertised", "Link Partner Ability");
+    printf("   %-22s | %-16s | %-16s\n", "Speed / Link Standard", "Local Advertised", "Partner Advertised");
     printf("  ------------------------+------------------+-------------------\n");
     printf("   %-22s | %-16s | %-16s\n", "2.5GBASE-T EEE",
-           (ocp_eee_adv2 & 0x0001) ? "Enabled" : "Disabled",
-           (ocp_eee_lp2 & 0x0001) ? "Supported" : "No");
+           (ocp_eee_adv2 & 0x0001) ? "Yes" : "No",
+           !peer_known ? "dont know" : (ocp_eee_lp2 & 0x0001) ? "Yes" : "No");
     printf("   %-22s | %-16s | %-16s\n", "5GBASE-T EEE",
-           (ocp_eee_adv2 & 0x0002) ? "Enabled" : "Disabled",
-           (ocp_eee_lp2 & 0x0002) ? "Supported" : "No");
+           (ocp_eee_adv2 & 0x0002) ? "Yes" : "No",
+           !peer_known ? "dont know" : (ocp_eee_lp2 & 0x0002) ? "Yes" : "No");
     printf("   %-22s | %-16s | %-16s\n", "1000BASE-T EEE",
-           (ocp_eee_adv & 0x0004) ? "Enabled" : "Disabled",
-           (ocp_eee_lp & 0x0004) ? "Supported" : "No");
+           (ocp_eee_adv & 0x0004) ? "Yes" : "No",
+           !peer_known ? "dont know" : (ocp_eee_lp & 0x0004) ? "Yes" : "No");
     printf("   %-22s | %-16s | %-16s\n", "100BASE-TX EEE",
-           (ocp_eee_adv & 0x0002) ? "Enabled" : "Disabled",
-           (ocp_eee_lp & 0x0002) ? "Supported" : "No");
+           (ocp_eee_adv & 0x0002) ? "Yes" : "No",
+           !peer_known ? "dont know" : (ocp_eee_lp & 0x0002) ? "Yes" : "No");
 
-    printf("\n Impact on macOS Performance:\n");
-    if (tx_eee || rx_eee || (ocp_eee_adv & 0x0006) || (ocp_eee_adv2 & 0x0003)) {
-        printf("   \033[1;33m[!] EEE is active.\033[0m On macOS with AppleUSBNCMData, EEE often\n");
-        printf("       triggers micro-stalls, packet jitter, or drops to 1Gbps.\n");
-        printf("       Run `rtl815x-tool eee --disable` to turn off EEE and fix latency.\n");
-    } else {
-        printf("   \033[1;32m[✓] EEE is fully disabled.\033[0m Maximum throughput and minimum jitter.\n");
-    }
     printf("=================================================================\n\n");
     return 0;
 }
@@ -118,11 +116,11 @@ int rtl_eee_set(rtl_dev_t *dev, bool enable) {
         uint16_t bmsr;
         if (rtl_mdio_read(dev, MII_BMSR, &bmsr) != 0) return -1;
         if ((bmsr & BMSR_LSTATUS) && (bmsr & BMSR_ANEGCOMPLETE)) {
-            printf("[+] Link re-established! EEE is now %s.\n", enable ? "ENABLED" : "DISABLED");
+            printf("[+] EEE settings written. Link is up and auto-negotiation completed.\n");
             return 0;
         }
     }
 
-    printf("[+] Changes written. Auto-negotiation in progress.\n");
+    printf("[!] EEE settings written. Timed out waiting for link-up and completed auto-negotiation.\n");
     return 0;
 }

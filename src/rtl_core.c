@@ -134,7 +134,9 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
                 rtl_dev_t *new_list = realloc(list, capacity * sizeof(rtl_dev_t));
                 if (!new_list) {
                     IOObjectRelease(service);
-                    break;
+                    IOObjectRelease(iter);
+                    rtl_free_devices(list, count);
+                    return -1;
                 }
                 list = new_list;
             }
@@ -218,6 +220,11 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
         }
 
         IOObjectRelease(service);
+    }
+    if (!IOIteratorIsValid(iter)) {
+        IOObjectRelease(iter);
+        rtl_free_devices(list, count);
+        return -1;
     }
     IOObjectRelease(iter);
 

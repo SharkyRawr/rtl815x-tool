@@ -10,6 +10,7 @@
 static uint8_t registers[3][65536];
 static uint16_t page;
 static int transfers, fail_at, short_at, enumerations;
+static int discovery_count, discovery_error;
 static double slept_seconds;
 static int sleep_calls, stop_after;
 static rtl_dev_t fixture;
@@ -56,6 +57,8 @@ static void put_word(int bank, uint16_t address, uint16_t value) {
 static void reset_fixture(void) {
     memset(registers, 0, sizeof(registers));
     transfers = fail_at = short_at = enumerations = 0;
+    discovery_count = 1;
+    discovery_error = 0;
     slept_seconds = 0;
     sleep_calls = 0;
     stop_after = 1;
@@ -70,10 +73,12 @@ static void reset_fixture(void) {
 /* The test build renames only core discovery/free; no real adapter is touched. */
 int rtl_find_devices(rtl_dev_t **out, int *count) {
     enumerations++;
+    *count = discovery_count;
+    *out = NULL;
+    if (discovery_error || !*count) return discovery_error;
     *out = malloc(sizeof(fixture));
     assert(*out);
     **out = fixture;
-    *count = 1;
     return 0;
 }
 
@@ -85,22 +90,28 @@ void rtl_free_devices(rtl_dev_t *devices, int count) {
 int rtl_test_nanosleep(const struct timespec *delay, struct timespec *remaining) {
     (void)remaining;
     slept_seconds = delay->tv_sec + delay->tv_nsec / 1e9;
-    if (++sleep_calls < stop_after) return 0;
+    if (++sleep_calls < stop_after) {
+        rtl_tally_counters_t sample = {.tx_one_collision = 1, .tx_multi_collision = 8};
+        memcpy(&registers[0][PLA_TALLYCNT], &sample, sizeof(sample));
+        return 0;
+    }
     raise(SIGTERM);
     errno = EINTR;
     return -1;
 }
 
 static FILE *capture;
-static int saved_stdout;
+static int saved_stdout, saved_stderr;
 static char output[32768];
 
 static void capture_start(void) {
     fflush(stdout);
     saved_stdout = dup(STDOUT_FILENO);
+    saved_stderr = dup(STDERR_FILENO);
     capture = tmpfile();
-    assert(capture && saved_stdout >= 0);
+    assert(capture && saved_stdout >= 0 && saved_stderr >= 0);
     assert(dup2(fileno(capture), STDOUT_FILENO) >= 0);
+    assert(dup2(fileno(capture), STDERR_FILENO) >= 0);
 }
 
 static void capture_end(void) {
@@ -109,6 +120,8 @@ static void capture_end(void) {
     size_t size = fread(output, 1, sizeof(output) - 1, capture);
     output[size] = 0;
     assert(dup2(saved_stdout, STDOUT_FILENO) >= 0);
+    assert(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
     close(saved_stdout);
     fclose(capture);
 }
@@ -257,7 +270,57 @@ static void test_speed(void) {
     assert(rtl_diag_print_phy(&fixture) == 0);
     capture_end();
     row = strstr(output, "2.5GBASE-T Full");
-    assert(row && strstr(row, "Supported") && strstr(row, "Supported") < strchr(row, '\n'));
+    assert(row && strstr(row, "Yes") && strstr(row, "Yes") < strchr(row, '\n'));
+}
+
+static void test_diagnostic_reports(void) {
+    reset_fixture();
+    static const rtl_version_info_t unknown = {.name = "unknown", .revision_str = "unknown"};
+    fixture.version_info = &unknown;
+    char *phy[] = {"test", "phy", NULL};
+    assert(cli(2, phy) == 0);
+    assert(strstr(output, "2.5GBASE-T Full        | dont know        | dont know"));
+    assert(strstr(output, "5GBASE-T Full          | dont know        | dont know"));
+
+    char *status[] = {"test", "status", NULL};
+    put_word(2, OCP_BASE_MII + 2 * MII_ADVERTISE, 0x0800);
+    put_word(2, OCP_BASE_MII + 2 * MII_LPA, 0x0800);
+    assert(cli(2, status) == 0 && strstr(output, "local asymmetric, partner asymmetric"));
+    put_word(2, OCP_BASE_MII + 2 * MII_BMSR, 0);
+    assert(cli(2, status) == 0 && strstr(output, "local asymmetric, partner dont know"));
+
+    char *eee[] = {"test", "eee", "status", NULL};
+    put_word(2, OCP_EEE_ADV, 0x0004);
+    assert(cli(3, eee) == 0);
+    assert(strstr(output, "1000BASE-T EEE         | Yes              | dont know"));
+    assert(!strstr(output, "EEE is active") && !strstr(output, "AppleUSBNCMData"));
+
+    char *led[] = {"test", "led", "status", NULL};
+    char *set[] = {"test", "led", "set", NULL, NULL};
+    const char *modes[] = {"default", "link-only", "activity-only", "off", "0xbeef"};
+    for (size_t i = 0; i < sizeof(modes)/sizeof(*modes); i++) {
+        set[3] = (char *)modes[i];
+        assert(cli(4, set) == 0 && cli(3, led) == 0);
+        char expected[64];
+        snprintf(expected, sizeof(expected), "Matching preset: %s", i == 4 ? "dont know" : modes[i]);
+        assert(strstr(output, expected));
+    }
+    assert(strstr(output, "0xbeef"));
+
+    char *power[] = {"test", "power", "default", NULL};
+    assert(cli(3, power) == 0 && strstr(output, "UPS and LPM control bits set"));
+    power[2] = "status";
+    assert(cli(3, power) == 0 && strstr(output, "UPS Enabled") && strstr(output, "LPM Enabled"));
+
+    char *restart[] = {"test", "phy", "--restart-an", NULL};
+    assert(cli(3, restart) == 0 && strstr(output, "Timed out waiting for link-up"));
+    eee[2] = "disable";
+    assert(cli(3, eee) == 0 && strstr(output, "Timed out waiting for link-up"));
+
+    discovery_error = -1;
+    assert(cli(2, status) == 1 && strstr(output, "Failed to enumerate"));
+    discovery_error = discovery_count = 0;
+    assert(cli(2, status) == 1 && strstr(output, "No supported Realtek"));
 }
 
 static void test_cli_failures(void) {
@@ -299,6 +362,15 @@ static void test_watch(void) {
     char *watch[] = {"test", "watch", NULL};
     assert(cli(2, watch) == 1);
     assert(strstr(output, "\033[?25h") && !strstr(output, "[+]"));
+    reset_fixture();
+    stop_after = 2;
+    rtl_tally_counters_t before = {.tx_one_collision = UINT32_MAX, .tx_multi_collision = 5};
+    memcpy(&registers[0][PLA_TALLYCNT], &before, sizeof(before));
+    assert(cli(2, watch) == 0);
+    char *row = strstr(output, "Collisions ");
+    unsigned long long total, delta;
+    assert(row && sscanf(row, "Collisions | %llu | +%llu", &total, &delta) == 2);
+    assert(total == 9 && delta == 5);
     const char *invalid[] = {"nan", "inf", "-1", "0", "abc", "5x", "1e100", "3601"};
     for (size_t i = 0; i < sizeof(invalid)/sizeof(*invalid); i++) {
         reset_fixture();
@@ -312,12 +384,13 @@ static void test_watch(void) {
 
 int main(void) {
     char *help[] = {"test", "--help", NULL};
-    assert(cli(2, help) == 0 && strstr(output, "v1.0.2"));
+    assert(cli(2, help) == 0 && strstr(output, "v1.0.3"));
     test_selection();
     test_transfers();
     test_mutation_failures();
     test_status_identity();
     test_speed();
+    test_diagnostic_reports();
     test_cli_failures();
     test_watch();
     puts("All regression tests passed (mock USB; no adapter settings changed).");

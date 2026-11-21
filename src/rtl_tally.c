@@ -160,6 +160,9 @@ int rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
         uint32_t d_rx_err = curr.rx_errors - prev.rx_errors;
         uint16_t d_rx_miss = curr.rx_missed - prev.rx_missed;
 
+        uint32_t single_delta = curr.tx_one_collision - prev.tx_one_collision;
+        uint32_t multi_delta = curr.tx_multi_collision - prev.tx_multi_collision;
+
         double tx_pps = (double)d_tx_pkt / interval_sec;
         double rx_pps = (double)d_rx_pkt / interval_sec;
 
@@ -195,8 +198,8 @@ int rtl_tally_watch(rtl_dev_t *dev, double interval_sec) {
                curr.rx_errors, d_rx_err > 0 ? "\033[1;31m" : "", d_rx_err);
         printf("  RX Missed (FIFO Drops)  | %18u | %s+%16u\033[0m\n",
                curr.rx_missed, d_rx_miss > 0 ? "\033[1;31m" : "", (uint32_t)d_rx_miss);
-        printf("  Collisions              | %18u | +%16u\n",
-               curr.tx_one_collision + curr.tx_multi_collision, 0);
+        printf("  Collisions              | %18llu | +%16llu\n",
+               (uint64_t)curr.tx_one_collision + curr.tx_multi_collision, (uint64_t)single_delta + multi_delta);
         printf("=================================================================\n");
         printf(" Press [Ctrl+C] to stop monitoring.\n");
         fflush(stdout);
