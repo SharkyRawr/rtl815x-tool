@@ -3,28 +3,40 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void find_bsd_interface_recursive(io_service_t current, char *out_name, size_t max_len) {
-    if (out_name[0] != '\0') return;
+static bool read_string_property(io_service_t service, CFStringRef key, char *out, size_t size) {
+    CFTypeRef value = IORegistryEntryCreateCFProperty(service, key, kCFAllocatorDefault, 0);
+    bool ok = value && CFGetTypeID(value) == CFStringGetTypeID() &&
+              CFStringGetCString(value, out, (CFIndex)size, kCFStringEncodingUTF8) && out[0];
+    if (value) CFRelease(value);
+    if (!ok) out[0] = '\0';
+    return ok;
+}
 
-    CFTypeRef bsdRef = IORegistryEntryCreateCFProperty(current, CFSTR("BSD Name"), kCFAllocatorDefault, 0);
-    if (bsdRef) {
-        if (CFGetTypeID(bsdRef) == CFStringGetTypeID()) {
-            CFStringGetCString((CFStringRef)bsdRef, out_name, (CFIndex)max_len, kCFStringEncodingUTF8);
-        }
-        CFRelease(bsdRef);
-        return;
-    }
+static bool find_network_interface(io_service_t current, rtl_dev_t *dev) {
+    if (IOObjectConformsTo(current, "IONetworkInterface") &&
+        read_string_property(current, CFSTR("BSD Name"), dev->bsd_name, sizeof(dev->bsd_name)))
+        return true;
 
     io_iterator_t iter;
-    if (IORegistryEntryGetChildIterator(current, kIOServicePlane, &iter) == KERN_SUCCESS) {
-        io_service_t child;
-        while ((child = IOIteratorNext(iter)) != 0) {
-            find_bsd_interface_recursive(child, out_name, max_len);
-            IOObjectRelease(child);
-            if (out_name[0] != '\0') break;
+    if (IORegistryEntryGetChildIterator(current, kIOServicePlane, &iter) != KERN_SUCCESS)
+        return false;
+
+    bool found = false;
+    io_service_t child;
+    while ((child = IOIteratorNext(iter)) != 0) {
+        found = find_network_interface(child, dev);
+        /* Only identify the controller bound to USB on this interface's branch. */
+        if (found && (current == dev->service || IOObjectConformsTo(current, "IOUSBHostInterface")) &&
+            (IOObjectConformsTo(child, "IOUserNetworkEthernet") ||
+             IOObjectConformsTo(child, "IONetworkController"))) {
+            if (!read_string_property(child, CFSTR("IOUserServerName"), dev->driver, sizeof(dev->driver)))
+                read_string_property(child, CFSTR("CFBundleIdentifier"), dev->driver, sizeof(dev->driver));
         }
-        IOObjectRelease(iter);
+        IOObjectRelease(child);
+        if (found) break;
     }
+    IOObjectRelease(iter);
+    return found;
 }
 
 static const rtl_version_info_t *lookup_version_info(uint16_t version_raw) {
@@ -147,7 +159,9 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
             CFTypeRef speedRef = IORegistryEntryCreateCFProperty(service, CFSTR("UsbLinkSpeed"), kCFAllocatorDefault, 0);
             if (speedRef) {
                 if (CFGetTypeID(speedRef) == CFNumberGetTypeID()) {
-                    CFNumberGetValue((CFNumberRef)speedRef, kCFNumberSInt64Type, &entry->usb_link_speed_bps);
+                    int64_t bps;
+                    if (CFNumberGetValue((CFNumberRef)speedRef, kCFNumberSInt64Type, &bps) && bps > 0)
+                        snprintf(entry->usb_speed, sizeof(entry->usb_speed), "%g Mbps", bps / 1000000.0);
                 }
                 CFRelease(speedRef);
             }
@@ -172,9 +186,9 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
             }
 
             /* Map BSD interface name (enX) */
-            find_bsd_interface_recursive(service, entry->bsd_name, sizeof(entry->bsd_name));
+            find_network_interface(service, entry);
             if (entry->bsd_name[0] == '\0') {
-                snprintf(entry->bsd_name, sizeof(entry->bsd_name), "N/A");
+                snprintf(entry->bsd_name, sizeof(entry->bsd_name), "dont know");
             }
 
             /* Open briefly to read chip version and MAC address */
@@ -183,14 +197,15 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
                 uint32_t mac_l, mac_h;
                 entry->version_info = lookup_version_info(0);
                 if (rtl_ocp_read_word(entry, MCU_TYPE_PLA, PLA_TCR1, &tcr1) == 0) {
+                    entry->revision_known = true;
                     entry->version_raw = tcr1 & VERSION_MASK;
                     entry->version_info = lookup_version_info(entry->version_raw);
                 }
                 if (rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR, &mac_l) == 0 &&
                     rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR + 4, &mac_h) == 0) {
-                    for (int i = 0; i < 4; i++) entry->mac_addr[i] = (uint8_t)(mac_l >> (i * 8));
-                    entry->mac_addr[4] = (uint8_t)mac_h;
-                    entry->mac_addr[5] = (uint8_t)(mac_h >> 8);
+                    snprintf(entry->mac_address, sizeof(entry->mac_address),
+                             "%02x:%02x:%02x:%02x:%02x:%02x", mac_l & 0xff, (mac_l >> 8) & 0xff,
+                             (mac_l >> 16) & 0xff, mac_l >> 24, mac_h & 0xff, (mac_h >> 8) & 0xff);
                 }
 
                 rtl_close_device(entry);

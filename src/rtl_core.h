@@ -16,11 +16,13 @@ typedef struct {
     uint16_t pid;
     uint16_t version_raw;
     const rtl_version_info_t *version_info;
-    uint8_t mac_addr[6];
+    bool revision_known;
+    char mac_address[18];
+    char driver[256];
     char bsd_name[32];
     char product_name[128];
     char vendor_name[128];
-    uint64_t usb_link_speed_bps;
+    char usb_speed[48];
     uint32_t location_id;
     uint16_t ocp_base;
 } rtl_dev_t;

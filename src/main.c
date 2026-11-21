@@ -13,7 +13,7 @@
 #include "rtl_led.h"
 
 static void print_usage(const char *progname) {
-    printf("Realtek RTL8156 / RTL815x macOS Diagnostics & Control CLI (v1.0.1)\n\n");
+    printf("Realtek RTL8156 / RTL815x macOS Diagnostics & Control CLI (v1.0.2)\n\n");
     printf("Usage:\n");
     printf("  %s [options] <command> [arguments]\n\n", progname);
     printf("Commands:\n");
@@ -46,19 +46,12 @@ static void cmd_list(rtl_dev_t *devices, int count) {
     printf("\nConnected Realtek USB Network Adapters (%d found):\n", count);
     printf("-----------------------------------------------------------------\n");
     for (int i = 0; i < count; i++) {
-        const char *usb_speed = "USB 2.0 (480M)";
-        if (devices[i].usb_link_speed_bps >= 10000000000ULL) {
-            usb_speed = "USB 3.2 (10G)";
-        } else if (devices[i].usb_link_speed_bps >= 5000000000ULL) {
-            usb_speed = "USB 3.2 (5G)";
-        }
-        printf("[%d] %-10s | %-12s | MAC: %02x:%02x:%02x:%02x:%02x:%02x | %s | %s\n",
+        printf("[%d] %-10s | %-12s | MAC: %s | %s | %s\n",
                i,
                devices[i].bsd_name,
                devices[i].version_info->name,
-               devices[i].mac_addr[0], devices[i].mac_addr[1], devices[i].mac_addr[2],
-               devices[i].mac_addr[3], devices[i].mac_addr[4], devices[i].mac_addr[5],
-               usb_speed,
+               devices[i].mac_address[0] ? devices[i].mac_address : "dont know",
+               devices[i].usb_speed[0] ? devices[i].usb_speed : "dont know",
                devices[i].product_name);
     }
     printf("-----------------------------------------------------------------\n\n");

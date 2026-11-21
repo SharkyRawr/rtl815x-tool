@@ -104,9 +104,9 @@ five-second interval. Intervals must be finite and between 0.2 and 3600 seconds.
    Chip Family      : RTL8156B
    Revision Code    : 0x7410 (v2-alt/BG (2.5GbE))
    USB VID:PID      : 0bda:8156 (Realtek USB 10_100_1G_2_5G LAN)
-   USB Bus Speed    : USB 3.2 Gen 1 (5 Gbps SuperSpeed)
+   USB Bus Speed    : 5000 Mbps
    Hardware MAC     : 00:e0:4c:68:00:82
-   macOS Interface  : en12 (Driver: AppleUSBNCMData / NCM Mode)
+   macOS Interface  : en12 (Driver: com.realtek.dext.RTL815xEthernet)
 
  Link & Physical Layer (PHY):
    Link State       : UP (Active)
@@ -114,7 +114,7 @@ five-second interval. Intervals must be finite and between 0.2 and 3600 seconds.
    Duplex Mode      : Full Duplex
    Auto-Negotiation : Completed
    Flow Control     : Symmetric Pause (RX & TX)
-   Energy Eff. Eth. : Disabled (Optimal Low Latency)
+   Energy Eff. Eth. : Disabled
 
  Controller Registers:
    PLA_RMS (Max RX) : 0 bytes
@@ -252,7 +252,7 @@ To re-enable EEE:
 ## Technical Notes: How Endpoint 0 Userspace Control Works
 
 ### The macOS NCM Driver vs. Endpoint 0
-When an RTL8156 adapter is plugged into macOS, Apple's kernel driver `AppleUSBNCMData` claims **USB Configuration 2 (CDC-NCM)** for standard driverless network traffic. 
+When an RTL8156 adapter uses Apple's NCM driver, `AppleUSBNCMData` claims **USB Configuration 2 (CDC-NCM)** for standard driverless network traffic.
 
 While the bulk data endpoints (EP1 IN / EP2 OUT) are owned by the kernel network stack, **USB Endpoint 0 (the Default Control Pipe)** remains accessible from userspace via `IOKitLib` and `IOUSBLib`.
 

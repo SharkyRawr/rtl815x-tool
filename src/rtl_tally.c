@@ -67,9 +67,8 @@ int rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
         printf("    \"chip\": \"%s\",\n", dev->version_info->name);
         printf("    \"revision\": \"%s\",\n", dev->version_info->revision_str);
         printf("    \"bsd_interface\": \"%s\",\n", dev->bsd_name);
-        printf("    \"mac_address\": \"%02x:%02x:%02x:%02x:%02x:%02x\",\n",
-               dev->mac_addr[0], dev->mac_addr[1], dev->mac_addr[2],
-               dev->mac_addr[3], dev->mac_addr[4], dev->mac_addr[5]);
+        printf("    \"mac_address\": \"%s\",\n",
+               dev->mac_address[0] ? dev->mac_address : "dont know");
         printf("    \"vid\": \"0x%04x\",\n", dev->vid);
         printf("    \"pid\": \"0x%04x\"\n", dev->pid);
         printf("  },\n");
@@ -94,10 +93,9 @@ int rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
 
     printf("\n=================================================================\n");
     printf(" Realtek Hardware Statistics & Error Counters\n");
-    printf(" Interface: %s (%s, %02x:%02x:%02x:%02x:%02x:%02x)\n",
+    printf(" Interface: %s (%s, %s)\n",
            dev->bsd_name, dev->version_info->name,
-           dev->mac_addr[0], dev->mac_addr[1], dev->mac_addr[2],
-           dev->mac_addr[3], dev->mac_addr[4], dev->mac_addr[5]);
+           dev->mac_address[0] ? dev->mac_address : "dont know");
     printf("=================================================================\n");
     printf(" Traffic Volume:\n");
     printf("   TX Packets Total     : %'llu\n", c.tx_packets);

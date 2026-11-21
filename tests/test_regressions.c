@@ -210,6 +210,21 @@ static void test_mutation_failures(void) {
     assert(registers[0][PLA_EEE_CR] == 0x34 && registers[0][PLA_EEE_CR + 1] == 0x12);
 }
 
+static void test_status_identity(void) {
+    reset_fixture();
+    char *args[] = {"test", "status", NULL};
+    assert(cli(2, args) == 0);
+    assert(strstr(output, "en-test (Driver: dont know)"));
+    assert(strstr(output, "USB Bus Speed    : dont know"));
+    assert(strstr(output, "Hardware MAC     : dont know"));
+    assert(strstr(output, "Revision Code    : dont know"));
+    strcpy(fixture.driver, "example.dext.Ethernet");
+    fail_at = 1;
+    transfers = 0;
+    assert(cli(2, args) == 1);
+    assert(strstr(output, "en-test (Driver: example.dext.Ethernet)"));
+}
+
 static void test_speed(void) {
     const uint16_t statuses[] = {0x0000, 0x0006, 0x000b, 0x0013, 0x0403, 0x1003};
     const char *speeds[] = {"Link Down", "10 Mbps", "100 Mbps", "1.0 Gbps", "2.5 Gbps", "5.0 Gbps"};
@@ -297,10 +312,11 @@ static void test_watch(void) {
 
 int main(void) {
     char *help[] = {"test", "--help", NULL};
-    assert(cli(2, help) == 0 && strstr(output, "v1.0.1"));
+    assert(cli(2, help) == 0 && strstr(output, "v1.0.2"));
     test_selection();
     test_transfers();
     test_mutation_failures();
+    test_status_identity();
     test_speed();
     test_cli_failures();
     test_watch();

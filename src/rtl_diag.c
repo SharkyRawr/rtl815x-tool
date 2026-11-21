@@ -5,6 +5,21 @@
 int rtl_diag_print_status(rtl_dev_t *dev) {
     if (!dev) return -1;
 
+    printf("\n=================================================================\n");
+    printf(" Realtek USB Ethernet Diagnostics: %s (%s)\n", dev->version_info->name, dev->version_info->revision_str);
+    printf("=================================================================\n");
+    printf(" Hardware Identification:\n");
+    printf("   Chip Family      : %s\n", dev->version_info->name);
+    if (dev->revision_known)
+        printf("   Revision Code    : 0x%04x (%s)\n", dev->version_raw, dev->version_info->revision_str);
+    else
+        puts("   Revision Code    : dont know");
+    printf("   USB VID:PID      : %04x:%04x (%s %s)\n", dev->vid, dev->pid, dev->vendor_name, dev->product_name);
+    printf("   USB Bus Speed    : %s\n", dev->usb_speed[0] ? dev->usb_speed : "dont know");
+    printf("   Hardware MAC     : %s\n", dev->mac_address[0] ? dev->mac_address : "dont know");
+    printf("   macOS Interface  : %s (Driver: %s)\n", dev->bsd_name,
+           dev->driver[0] ? dev->driver : "dont know");
+
     if (rtl_open_device(dev) != 0) {
         fprintf(stderr, "Error: Failed to open USB device %04x:%04x\n", dev->vid, dev->pid);
         return -1;
@@ -39,42 +54,22 @@ int rtl_diag_print_status(rtl_dev_t *dev) {
         else if (phy_status & PHY_STAT_1000) speed_str = "1.0 Gbps (1000BASE-T)";
         else if (phy_status & PHY_STAT_100) speed_str = "100 Mbps (100BASE-TX)";
         else if (phy_status & PHY_STAT_10) speed_str = "10 Mbps (10BASE-T)";
-        else speed_str = "Connected (Unknown Speed)";
+        else speed_str = "dont know";
         duplex_str = (phy_status & PHY_STAT_FULL_DUPLEX) ? "Full Duplex" : "Half Duplex";
     }
-
-    const char *usb_speed_str = "USB 2.0 (480 Mbps)";
-    if (dev->usb_link_speed_bps >= 10000000000ULL) {
-        usb_speed_str = "USB 3.2 Gen 2 (10 Gbps SuperSpeed+)";
-    } else if (dev->usb_link_speed_bps >= 5000000000ULL) {
-        usb_speed_str = "USB 3.2 Gen 1 (5 Gbps SuperSpeed)";
-    }
-
-    printf("\n=================================================================\n");
-    printf(" Realtek USB Ethernet Diagnostics: %s (%s)\n", dev->version_info->name, dev->version_info->revision_str);
-    printf("=================================================================\n");
-    printf(" Hardware Identification:\n");
-    printf("   Chip Family      : %s\n", dev->version_info->name);
-    printf("   Revision Code    : 0x%04x (%s)\n", dev->version_raw, dev->version_info->revision_str);
-    printf("   USB VID:PID      : %04x:%04x (%s %s)\n", dev->vid, dev->pid, dev->vendor_name, dev->product_name);
-    printf("   USB Bus Speed    : %s\n", usb_speed_str);
-    printf("   Hardware MAC     : %02x:%02x:%02x:%02x:%02x:%02x\n",
-           dev->mac_addr[0], dev->mac_addr[1], dev->mac_addr[2],
-           dev->mac_addr[3], dev->mac_addr[4], dev->mac_addr[5]);
-    printf("   macOS Interface  : %s (Driver: AppleUSBNCMData / NCM Mode)\n", dev->bsd_name);
 
     printf("\n Link & Physical Layer (PHY):\n");
     printf("   Link State       : %s\n", link_up ? "\033[1;32mUP (Active)\033[0m" : "\033[1;31mDOWN (No Carrier)\033[0m");
     printf("   Negotiated Speed : \033[1;36m%s\033[0m\n", speed_str);
     printf("   Duplex Mode      : %s\n", duplex_str);
-    printf("   Auto-Negotiation : %s\n", an_complete ? "Completed" : (link_up ? "In Progress" : "Disabled/Idle"));
+    printf("   Auto-Negotiation : %s\n", an_complete ? "Completed" : "Incomplete");
 
     bool sym_pause = (adv & 0x0400) && (lpa & 0x0400);
     bool asym_pause = (adv & 0x0800) && (lpa & 0x0800);
     printf("   Flow Control     : %s\n", sym_pause ? "Symmetric Pause (RX & TX)" : (asym_pause ? "Asymmetric Pause" : "Disabled / None"));
 
     bool eee_active = (eee_cr & (EEE_TX_EN | EEE_RX_EN)) != 0;
-    printf("   Energy Eff. Eth. : %s\n", eee_active ? "Enabled (LPI Active)" : "Disabled (Optimal Low Latency)");
+    printf("   Energy Eff. Eth. : %s\n", eee_active ? "Enabled" : "Disabled");
 
     printf("\n Controller Registers:\n");
     printf("   PLA_RMS (Max RX) : %u bytes\n", rms);
