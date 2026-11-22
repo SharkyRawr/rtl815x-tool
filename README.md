@@ -1,8 +1,8 @@
-# Realtek RTL8156 / RTL815x macOS Diagnostics & Control Toolkit (`rtl815x-tool`)
+# Realtek RTL8156 / RTL8157 / RTL815x macOS Diagnostics & Control Toolkit (`rtl815x-tool`)
 
 A standalone macOS CLI utility for inspecting, diagnosing, and tuning **Realtek USB Ethernet adapters** (`RTL8156`, `RTL8156B`, `RTL8153`, `RTL8152`, and `RTL8157`).
 
-The tool communicates directly with the controller's **On-Chip Peripheral (OCP)** bus via **USB Endpoint 0 control transfers** using native macOS `IOKit`. It works seamlessly in userspace while macOS is running standard plug-and-play **CDC-NCM mode** (`AppleUSBNCMData`).
+The tool communicates directly with the controller's **On-Chip Peripheral (OCP)** bus via **USB Endpoint 0 control transfers** using native macOS `IOKit`. The `status` command reports the macOS driver bound to the selected interface.
 
 ---
 
@@ -12,17 +12,22 @@ The tool communicates directly with the controller's **On-Chip Peripheral (OCP)*
 | :--- | :--- | :--- | :--- |
 | **RTL8156B** | **2.5 Gbps** | `0x7050`, `0x7060`, `0x7070`, `0x7400`, `0x7410` | 2.5G USB-C/USB-3 Adapters & Docks |
 | **RTL8156 / RTL8156A** | **2.5 Gbps** | `0x7020`, `0x7030` | 2.5G USB-A / USB-C Adapters (1st Gen) |
-| **RTL8157** | **5.0 Gbps** | `0x7440`, `0x7450`, `0x7460` | 5G Multi-Gigabit USB Adapters |
+| **RTL8157** | **5.0 Gbps** | `0x1030` (RTL_VER_16) | 5G Multi-Gigabit USB Adapters |
 | **RTL8153 / RTL8153B/C** | **1.0 Gbps** | `0x5c00`, `0x5c10`, `0x5c20`, `0x5c30`, `0x6000`, `0x6010` | Standard Gigabit USB Dongles & Docks |
 | **RTL8152 / RTL8152B** | **100 Mbps** | `0x4c00`, `0x4c10` | Fast Ethernet Adapters |
+
+RTL8157 discovery matches Realtek USB product IDs `8157`, `8057`, `a157`, and
+`8d57`, plus the OEM ID `1f9b:25c3`. The tool checks the masked hardware
+revision in PLA TCR1 before using the RTL8157 register layout. These IDs come
+from Realtek’s Windows driver. [Driver package, rtu57cx22x64sta.INF](https://plugable.s3.us-east-1.amazonaws.com/bin/Realtek/Install_USB_Win11_11022_20_02062026.zip)
 
 ---
 
 ## Features
 
 * **Hardware & Link Overview (`status`):**
-  * Auto-detects chipset revision, hardware eFUSE MAC address, USB link speed (SuperSpeed 5Gbps vs USB2 480Mbps), and assigned macOS BSD interface name (`en12`).
-  * Real-time PHY link status, negotiated speed (2.5 Gbps / 1 Gbps / 100M / 10M), duplex mode, and local/partner pause advertisements.
+  * Auto-detects chipset revision, current controller MAC address, USB link speed reported by macOS, and assigned macOS BSD interface name (`en12`).
+  * Real-time PHY link status, negotiated speed (5 Gbps / 2.5 Gbps / 1 Gbps / 100M / 10M), duplex mode, and local/partner pause advertisements.
 * **Hardware Tally & Error Counters (`stats` / `--json`):**
   * Reads on-chip hardware counters directly from `PLA_TALLYCNT` (0xE890).
   * Tracks accurate TX/RX packet volume, RX Unicast, Multicast, and Broadcast distribution.
@@ -31,19 +36,19 @@ The tool communicates directly with the controller's **On-Chip Peripheral (OCP)*
 * **Live Terminal Monitor (`watch`):**
   * Interactive fullscreen dashboard reporting real-time packets/sec (pps), delta traffic, and error rates.
 * **PHY & Auto-Negotiation Analysis (`phy`):**
-  * Deep inspection of MII/MDIO registers (BMCR, BMSR, PHY ID, 1000Base-T, 2.5GBase-T).
+  * Deep inspection of MII/MDIO registers (BMCR, BMSR, PHY ID, 1000BASE-T, 2.5GBASE-T, 5GBASE-T).
   * Side-by-side comparison of local and link partner advertisements. Unavailable values display as `dont know`.
   * On-demand PHY auto-negotiation restart (`--restart-an`) to re-sync link without unplugging.
 * **Energy Efficient Ethernet Tuning (`eee`):**
-  * Inspect Low Power Idle (LPI) TX/RX configuration and EEE advertisement across 100M, 1G, and 2.5G.
+  * Inspect Low Power Idle (LPI) TX/RX configuration and EEE advertisement at 100 Mb/s, 1 Gb/s, 2.5 Gb/s, and 5 Gb/s on RTL8157.
   * Change EEE configuration with `eee disable` or `eee enable`.
 * **Power Management Tuning (`power`):**
-  * Inspect and configure USB Link Power Management (LPM L1) and Ultra Power Saving (UPS).
-  * Clear the UPS and LPM control bits with `power no-sleep`, or set them with `power default`.
+  * On RTL8157, `power status` reports U1/U2, U2-to-P3, and the suspend UPS enable bit. `power no-sleep` disables the two link-power controls. The `default` preset enables U2-to-P3 and enables U1/U2 at SuperSpeed or faster. The bound driver manages suspend UPS.
+  * Other chipsets use the existing UPS and LPM controls.
 * **LED Pattern Customization (`led`):**
-  * Configure on-adapter LEDs: standard, link-only (solid), activity-only (blink on transfer), stealth mode (all LEDs off), or custom bitmasks.
+  * RTL8157 LED control is unavailable. On other supported chipsets, configure LEDs with standard, link-only (solid), activity-only (blink on transfer), stealth mode (all LEDs off), or custom bitmasks.
 * **Raw Register Access (`reg`):**
-  * Direct read/write/dump of PLA, USB, and GPHY registers for development and reverse engineering.
+  * Direct read/write/dump of PLA, USB, and PHY registers, plus the RTL8157 IP and BMU register spaces for development and reverse engineering.
 
 ---
 
@@ -83,6 +88,11 @@ endpoint under AddressSanitizer and UndefinedBehaviorSanitizer. The tests cover
 device selection, failed and short USB transfers, write error propagation,
 resolved link speeds, and watch intervals without changing a connected adapter.
 
+The RTL8157 fixture emulates both USB command interfaces, including their busy
+flags. It covers 5 Gb/s link and EEE advertisements, auto-negotiation restart,
+tally reads and reset, monitoring, power controls, and raw register access.
+Physical RTL8157 operation has yet to be verified.
+
 Commands return a nonzero exit status on USB failures. Register operations stop
 at the first failure; a command that already performed some writes can leave
 partial changes applied. Invalid explicit device indices are rejected.
@@ -117,7 +127,7 @@ five-second interval. Intervals must be finite and between 0.2 and 3600 seconds.
    Energy Eff. Eth. : Disabled
 
  Controller Registers:
-   PLA_RMS (Max RX) : 0 bytes
+   PLA_RMS (Max RX) : 1518 bytes
    PLA_RCR (Filter) : 0x480e (Accept: Physical Multicast Broadcast )
 =================================================================
 ```
@@ -217,6 +227,9 @@ To re-enable EEE:
 ```
 
 ### 6. LED Configuration
+
+The RTL8157 selector addresses and bit assignments are unknown. On that chip,
+`led` reports the limitation and exits before accessing registers.
 ```bash
 # Check current LED configuration
 ./rtl815x-tool led status
@@ -242,13 +255,26 @@ To re-enable EEE:
 # Hexdump PLA registers from 0xC000 to 0xC040
 ./rtl815x-tool reg dump pla 0xc000 0x40
 
-# Write 16-bit value to register
-./rtl815x-tool reg write pla 0xdd90 0x0000 16
+# Read the RTL8157 U2-to-P3 control over the indirect IP interface
+./rtl815x-tool reg read ip 0xc2c0
+
+# Dump one 32-bit BMU register on RTL8157
+./rtl815x-tool reg dump bmu 0x2300 4
 ```
 
 ---
 
 ## Technical Notes: How Endpoint 0 Userspace Control Works
+
+### RTL8157 register access
+
+The installed Realtek DriverKit extension 1.1.0 retains symbols for
+`RTL8157::CheckHwId_Impl`, `phy_read_Impl`, `phy_write_Impl`,
+`EEE_en_Impl`, and `rtl_u2p3_en_Impl`. Its PHY methods send 16-bit commands
+through USB registers `0xd630–0xd634`. IP and BMU use a separate command
+register at `0xd5dc` with a 32-bit data register. Each command polls the
+busy bit and reports a timeout if the request does not finish. Register layout
+and EEE modes follow the vendor driver. [Realtek’s driver source](https://github.com/awesometic/realtek-r8152-dkms/blob/c1034ab62ddc48383118598f43c3227fc53c309e/src/r8152.c).
 
 ### The macOS NCM Driver vs. Endpoint 0
 When an RTL8156 adapter uses Apple's NCM driver, `AppleUSBNCMData` claims **USB Configuration 2 (CDC-NCM)** for standard driverless network traffic.
@@ -260,7 +286,9 @@ Realtek controllers use vendor-specific control transfers on Endpoint 0 (`bReque
 * **OCP Register Write (`0x40`, `0x05`)**: `bmRequestType=0x40`, `wValue=register_address`, `wIndex=MCU_TYPE | BYTE_EN_MASK`.
 * **GPHY Access**: Accessing MDIO/PHY registers is achieved by switching the base address register (`PLA_OCP_GPHY_BASE` at `0xE86C`) and reading through the GPHY aperture (`0xB000` + offset).
 
-This enables complete visibility into hardware counters, PHY registers, link health, and power configurations without needing custom kernel extensions or DriverKit signing entitlements.
+These transfers share the controller with the active network driver. Indirect
+access uses multiple USB transfers, so concurrent tools or a driver power
+transition can interfere with a register transaction.
 
 ---
 

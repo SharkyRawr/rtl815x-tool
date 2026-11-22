@@ -46,8 +46,9 @@ int rtl_tally_reset(rtl_dev_t *dev) {
     if (rtl_open_device(dev) != 0) return -1;
 
     printf("[*] Resetting hardware tally counters on %s (%s)...\n", dev->version_info->name, dev->bsd_name);
-    /* Writing 0x0001 to PLA_RSTTALLY clears on-chip statistics registers */
-    if (rtl_ocp_write_dword(dev, MCU_TYPE_PLA, PLA_RSTTALLY, 0x00000001) != 0) return -1;
+    uint16_t control;
+    if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_RSTTALLY, &control) != 0 ||
+        rtl_ocp_write_word(dev, MCU_TYPE_PLA, PLA_RSTTALLY, control | 1) != 0) return -1;
     printf("[+] Hardware counters successfully reset to 0.\n");
     return 0;
 }

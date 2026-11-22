@@ -10,13 +10,20 @@ static const struct {
     {"default", 0x002b}, {"link-only", 0x0003}, {"activity-only", 0x0020}, {"off", 0x0000}
 };
 
+static int open_led_registers(rtl_dev_t *dev) {
+    if (dev->version_info->family == CHIP_RTL8157) {
+        fprintf(stderr, "RTL8157 LED control unavailable: selector register mapping unknown.\n");
+        return -1;
+    }
+    if (rtl_open_device(dev) == 0) return 0;
+    fprintf(stderr, "Error: Failed to open USB device %04x:%04x\n", dev->vid, dev->pid);
+    return -1;
+}
+
 int rtl_led_print_status(rtl_dev_t *dev) {
     if (!dev) return -1;
 
-    if (rtl_open_device(dev) != 0) {
-        fprintf(stderr, "Error: Failed to open USB device %04x:%04x\n", dev->vid, dev->pid);
-        return -1;
-    }
+    if (open_led_registers(dev) != 0) return -1;
 
     uint16_t ledsel;
     if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_LEDSEL, &ledsel) != 0) return -1;
@@ -46,7 +53,7 @@ int rtl_led_print_status(rtl_dev_t *dev) {
 
 int rtl_led_set_mode(rtl_dev_t *dev, const char *mode) {
     if (!dev || !mode) return -1;
-    if (rtl_open_device(dev) != 0) return -1;
+    if (open_led_registers(dev) != 0) return -1;
 
     uint16_t val;
     if (strncasecmp(mode, "0x", 2) == 0) {

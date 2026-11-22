@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
@@ -13,7 +14,7 @@
 #include "rtl_led.h"
 
 static void print_usage(const char *progname) {
-    printf("Realtek RTL8156 / RTL815x macOS Diagnostics & Control CLI (v1.0.3)\n\n");
+    printf("Realtek RTL8156 / RTL8157 / RTL815x macOS Diagnostics & Control CLI (v1.0.4)\n\n");
     printf("Usage:\n");
     printf("  %s [options] <command> [arguments]\n\n", progname);
     printf("Commands:\n");
@@ -24,11 +25,12 @@ static void print_usage(const char *progname) {
     printf("  watch, monitor [-n <sec>]   Live terminal dashboard showing real-time pps & error deltas\n");
     printf("  phy [--restart-an]          Detailed MII/PHY register dump and auto-negotiation matrix\n");
     printf("  eee [status|disable|enable] Inspect or toggle Energy Efficient Ethernet\n");
-    printf("  power [status|no-sleep|default] Inspect or clear/set USB LPM and UPS controls\n");
-    printf("  led [status|set <mode>]     Inspect or customize LED blink patterns (default, off, link-only)\n");
-    printf("  reg read <mcu> <addr>       Directly read register (mcu: pla | usb | phy)\n");
+    printf("  power [status|no-sleep|default] Inspect power controls and configure link power saving\n");
+    printf("  led [status|set <mode>]     Inspect or customize LED patterns (unavailable on RTL8157)\n");
+    printf("  reg read <mcu> <addr>       Directly read register (pla | usb | phy | ip | bmu)\n");
     printf("  reg write <mcu> <addr> <val> [size] Directly write register (size: 8, 16, 32)\n");
     printf("  reg dump <mcu> <addr> <cnt> Hexdump a range of registers\n\n");
+    printf("  RTL8157 IP and BMU registers are 32-bit. PHY registers are 16-bit.\n\n");
     printf("Device Selection Options:\n");
     printf("  -i <interface>              Select adapter by macOS BSD interface name (e.g., -i en12)\n");
     printf("  -d <index>                  Select adapter by device index (0, 1, ...)\n");
@@ -57,110 +59,133 @@ static void cmd_list(rtl_dev_t *devices, int count) {
     printf("-----------------------------------------------------------------\n\n");
 }
 
-static int cmd_reg_read(rtl_dev_t *dev, const char *mcu_str, const char *addr_str) {
-    if (!dev || !mcu_str || !addr_str) {
-        fprintf(stderr, "Usage: reg read <pla|usb|phy> <addr_hex>\n");
-        return -1;
-    }
-    if (rtl_open_device(dev) != 0) return -1;
+enum reg_space { REG_PLA, REG_USB, REG_PHY, REG_IP, REG_BMU };
 
-    uint32_t addr = (uint32_t)strtoul(addr_str, NULL, 16);
-    if (strcasecmp(mcu_str, "phy") == 0) {
-        uint16_t val;
-        if (rtl_ocp_reg_read(dev, (uint16_t)addr, &val) != 0) return -1;
-        printf("[PHY 0x%04x] = 0x%04x (%u)\n", addr, val, val);
-    } else if (strcasecmp(mcu_str, "usb") == 0) {
-        uint32_t val;
-        if (rtl_ocp_read_dword(dev, MCU_TYPE_USB, (uint16_t)addr, &val) != 0) return -1;
-        uint16_t wval;
-        if (rtl_ocp_read_word(dev, MCU_TYPE_USB, (uint16_t)addr, &wval) != 0) return -1;
-        uint8_t bval;
-        if (rtl_ocp_read_byte(dev, MCU_TYPE_USB, (uint16_t)addr, &bval) != 0) return -1;
-        printf("[USB 0x%04x] 32-bit: 0x%08x | 16-bit: 0x%04x | 8-bit: 0x%02x\n", addr, val, wval, bval);
-    } else if (strcasecmp(mcu_str, "pla") == 0) {
-        uint32_t val;
-        if (rtl_ocp_read_dword(dev, MCU_TYPE_PLA, (uint16_t)addr, &val) != 0) return -1;
-        uint16_t wval;
-        if (rtl_ocp_read_word(dev, MCU_TYPE_PLA, (uint16_t)addr, &wval) != 0) return -1;
-        uint8_t bval;
-        if (rtl_ocp_read_byte(dev, MCU_TYPE_PLA, (uint16_t)addr, &bval) != 0) return -1;
-        printf("[PLA 0x%04x] 32-bit: 0x%08x | 16-bit: 0x%04x | 8-bit: 0x%02x\n", addr, val, wval, bval);
-    } else {
-        fprintf(stderr, "Unknown MCU type '%s'. Use 'pla', 'usb', or 'phy'.\n", mcu_str);
-        return -1;
-    }
-    return 0;
-}
+static const char *const reg_names[] = { "PLA", "USB", "PHY", "IP", "BMU" };
 
-static int cmd_reg_write(rtl_dev_t *dev, const char *mcu_str, const char *addr_str, const char *val_str, const char *size_str) {
-    if (!dev || !mcu_str || !addr_str || !val_str) {
-        fprintf(stderr, "Usage: reg write <pla|usb|phy> <addr_hex> <val_hex> [8|16|32]\n");
-        return -1;
-    }
-    if (rtl_open_device(dev) != 0) return -1;
-
-    uint32_t addr = (uint32_t)strtoul(addr_str, NULL, 16);
-    uint32_t val = (uint32_t)strtoul(val_str, NULL, 16);
-    int size = size_str ? atoi(size_str) : 16;
-
-    if (strcasecmp(mcu_str, "phy") == 0) {
-        if (rtl_ocp_reg_write(dev, (uint16_t)addr, (uint16_t)val) != 0) return -1;
-        printf("[+] Written [PHY 0x%04x] <= 0x%04x\n", addr, (uint16_t)val);
-    } else if (strcasecmp(mcu_str, "usb") == 0 || strcasecmp(mcu_str, "pla") == 0) {
-        uint16_t mcu = (strcasecmp(mcu_str, "usb") == 0) ? MCU_TYPE_USB : MCU_TYPE_PLA;
-        if (size == 8) {
-            if (rtl_ocp_write_byte(dev, mcu, (uint16_t)addr, (uint8_t)val) != 0) return -1;
-        } else if (size == 32) {
-            if (rtl_ocp_write_dword(dev, mcu, (uint16_t)addr, val) != 0) return -1;
-        } else {
-            if (rtl_ocp_write_word(dev, mcu, (uint16_t)addr, (uint16_t)val) != 0) return -1;
+static int parse_space(rtl_dev_t *dev, const char *name, enum reg_space *space) {
+    for (size_t i = 0; i < sizeof(reg_names) / sizeof(*reg_names); i++) {
+        if (name && strcasecmp(name, reg_names[i]) == 0) {
+            *space = (enum reg_space)i;
+            if ((i == REG_IP || i == REG_BMU) && dev->version_info->family != CHIP_RTL8157) {
+                fprintf(stderr, "The %s register space requires an RTL8157.\n", name);
+                return -1;
+            }
+            return 0;
         }
-        printf("[+] Written [%s 0x%04x] <= 0x%x (%d-bit)\n",
-               (mcu == MCU_TYPE_USB) ? "USB" : "PLA", addr, val, size);
-    } else {
-        fprintf(stderr, "Unknown MCU type '%s'. Use 'pla', 'usb', or 'phy'.\n", mcu_str);
+    }
+    fprintf(stderr, "Expected register space pla, usb, phy, ip, or bmu.\n");
+    return -1;
+}
+
+static int parse_hex(const char *arg, uint32_t max, uint32_t *out) {
+    char *end;
+    errno = 0;
+    unsigned long value = arg ? strtoul(arg, &end, 16) : 0;
+    if (!arg || !isxdigit((unsigned char)*arg) || *end || errno || value > max) {
+        fprintf(stderr, "Invalid hexadecimal register argument '%s'.\n", arg ? arg : "");
         return -1;
+    }
+    *out = (uint32_t)value;
+    return 0;
+}
+
+static int read_register(rtl_dev_t *dev, enum reg_space space, uint16_t addr, uint32_t *out) {
+    if (space == REG_PHY) {
+        uint16_t value;
+        if (rtl_ocp_reg_read(dev, addr, &value) != 0) return -1;
+        *out = value;
+        return 0;
+    }
+    if (space == REG_IP || space == REG_BMU)
+        return rtl_adv_read(dev, space == REG_IP ? ADV_CMD_IP : ADV_CMD_BMU, addr, out);
+    return rtl_ocp_read_dword(dev, space == REG_USB ? MCU_TYPE_USB : MCU_TYPE_PLA, addr, out);
+}
+
+static int cmd_reg_read(rtl_dev_t *dev, const char *name, const char *address) {
+    enum reg_space space;
+    uint32_t addr, val;
+    if (parse_space(dev, name, &space) != 0 || parse_hex(address, UINT16_MAX, &addr) != 0) return -1;
+    if ((space == REG_PHY && (addr & 1)) ||
+        ((space == REG_IP || space == REG_BMU) && (addr & 3))) {
+        fprintf(stderr, "Unaligned %s register address.\n", name);
+        return -1;
+    }
+    if (rtl_open_device(dev) != 0 || read_register(dev, space, addr, &val) != 0) return -1;
+    if (space == REG_PLA || space == REG_USB) {
+        printf("[%s 0x%04x] 32-bit: 0x%08x | 16-bit: 0x%04x | 8-bit: 0x%02x\n",
+               space == REG_PLA ? "PLA" : "USB", addr, val,
+               (val >> ((addr & 2) * 8)) & 0xffff, (val >> ((addr & 3) * 8)) & 0xff);
+    } else {
+        printf("[%s 0x%04x] = 0x%0*x (%u)\n", reg_names[space], addr,
+               space == REG_PHY ? 4 : 8, val, val);
     }
     return 0;
 }
 
-static int cmd_reg_dump(rtl_dev_t *dev, const char *mcu_str, const char *addr_str, const char *cnt_str) {
-    if (!dev || !mcu_str || !addr_str) {
-        fprintf(stderr, "Usage: reg dump <pla|usb> <start_addr_hex> [count_hex]\n");
+static int cmd_reg_write(rtl_dev_t *dev, const char *name, const char *address,
+                         const char *value, const char *width) {
+    enum reg_space space;
+    uint32_t addr, val;
+    if (parse_space(dev, name, &space) != 0 || parse_hex(address, UINT16_MAX, &addr) != 0) return -1;
+    bool advanced = space == REG_IP || space == REG_BMU;
+    if (!width) width = advanced ? "32" : "16";
+    int size;
+    if (strcmp(width, "8") == 0) size = 8;
+    else if (strcmp(width, "16") == 0) size = 16;
+    else if (strcmp(width, "32") == 0) size = 32;
+    else {
+        fprintf(stderr, "Expected register width 8, 16, or 32.\n");
+        return -1;
+    }
+    if ((advanced && size != 32) || (space == REG_PHY && size != 16) ||
+        addr % (size / 8) != 0) {
+        fprintf(stderr, "Invalid width or alignment for a %s register write.\n", name);
+        return -1;
+    }
+    if (parse_hex(value, UINT32_MAX >> (32 - size), &val) != 0 || rtl_open_device(dev) != 0) return -1;
+    int rc;
+    uint16_t type = space == REG_USB ? MCU_TYPE_USB : MCU_TYPE_PLA;
+    if (advanced) rc = rtl_adv_write(dev, space == REG_IP ? ADV_CMD_IP : ADV_CMD_BMU, addr, val);
+    else if (space == REG_PHY) rc = rtl_ocp_reg_write(dev, addr, val);
+    else if (size == 8) rc = rtl_ocp_write_byte(dev, type, addr, val);
+    else if (size == 16) rc = rtl_ocp_write_word(dev, type, addr, val);
+    else rc = rtl_ocp_write_dword(dev, type, addr, val);
+    if (rc != 0) return -1;
+    if (space == REG_PHY) {
+        printf("[+] Written [PHY 0x%04x] <= 0x%04x\n", addr, val);
+        return 0;
+    }
+    printf("[+] Written [%s 0x%04x] <= 0x%x (%d-bit)\n", reg_names[space], addr, val, size);
+    return 0;
+}
+
+static int cmd_reg_dump(rtl_dev_t *dev, const char *name, const char *address, const char *length) {
+    enum reg_space space;
+    uint32_t start, count = 64;
+    if (parse_space(dev, name, &space) != 0 || parse_hex(address, UINT16_MAX, &start) != 0 ||
+        (length && parse_hex(length, UINT32_MAX, &count) != 0)) return -1;
+    unsigned step = space == REG_PHY ? 2 : 4;
+    start &= ~(step - 1);
+    if (count > 512) count = 512;
+    count = (count + step - 1) & ~(step - 1);
+    if (!count || start + count > 0x10000) {
+        fprintf(stderr, "Invalid register dump range.\n");
         return -1;
     }
     if (rtl_open_device(dev) != 0) return -1;
-
-    uint32_t start = (uint32_t)strtoul(addr_str, NULL, 16) & ~3;
-    uint32_t count = cnt_str ? (uint32_t)strtoul(cnt_str, NULL, 16) : 64;
-    if (count > 512) count = 512;
-    count = (count + 3) & ~3;
-
-    uint16_t mcu;
-    if (strcasecmp(mcu_str, "usb") == 0) {
-        mcu = MCU_TYPE_USB;
-    } else if (strcasecmp(mcu_str, "pla") == 0) {
-        mcu = MCU_TYPE_PLA;
-    } else {
-        fprintf(stderr, "Unknown MCU type '%s'. Use 'pla' or 'usb'.\n", mcu_str);
-        return -1;
-    }
-    printf("\nHexdump of %s registers [0x%04x - 0x%04x]:\n",
-           (mcu == MCU_TYPE_USB) ? "USB" : "PLA", start, start + count - 1);
+    printf("\nHexdump of %s registers [0x%04x - 0x%04x]:\n", reg_names[space], start, start + count - 1);
     printf("Offset  | 00 01 02 03  04 05 06 07  08 09 0A 0B  0C 0D 0E 0F\n");
     printf("--------+-------------------------------------------------\n");
-
-    for (uint32_t off = start; off < start + count; off += 16) {
-        printf("0x%04x  | ", off);
-        for (int i = 0; i < 16; i += 4) {
-            uint32_t val;
-            if (rtl_ocp_read_dword(dev, mcu, (uint16_t)(off + i), &val) != 0) return -1;
-            uint8_t *b = (uint8_t *)&val;
-            printf("%02x %02x %02x %02x  ", b[0], b[1], b[2], b[3]);
-        }
-        printf("\n");
+    for (uint32_t off = 0; off < count; off += step) {
+        uint32_t val;
+        if (read_register(dev, space, start + off, &val) != 0) return -1;
+        if (off % 16 == 0) printf("0x%04x  | ", start + off);
+        for (unsigned byte = 0; byte < step; byte++)
+            printf("%02x ", (val >> (byte * 8)) & 0xff);
+        if ((off + step) % 4 == 0) putchar(' ');
+        if ((off + step) % 16 == 0 || off + step == count) putchar('\n');
     }
-    printf("\n");
     return 0;
 }
 

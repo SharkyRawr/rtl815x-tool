@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static bool read_string_property(io_service_t service, CFStringRef key, char *out, size_t size) {
     CFTypeRef value = IORegistryEntryCreateCFProperty(service, key, kCFAllocatorDefault, 0);
@@ -39,20 +40,37 @@ static bool find_network_interface(io_service_t current, rtl_dev_t *dev) {
     return found;
 }
 
-static const rtl_version_info_t *lookup_version_info(uint16_t version_raw) {
-    for (int i = 0; RTL_CHIP_VERSIONS[i].version_code != 0; i++) {
-        if (RTL_CHIP_VERSIONS[i].version_code == version_raw) {
-            return &RTL_CHIP_VERSIONS[i];
-        }
-    }
-    /* Default to the last fallback entry */
-    int i = 0;
-    while (RTL_CHIP_VERSIONS[i].version_code != 0) i++;
-    return &RTL_CHIP_VERSIONS[i];
+bool rtl_is_8157_usb_id(uint16_t vid, uint16_t pid) {
+    /* Realtek's rtu57cx22x64sta.INF, including the OEM adapter. */
+    return (vid == REALTEK_VID && (pid == PID_RTL8157 || pid == 0x8057 ||
+                                   pid == 0xa157 || pid == 0x8d57)) ||
+           (vid == 0x1f9b && pid == 0x25c3);
+}
+
+static const rtl_version_info_t *lookup_version(uint16_t tcr1) {
+    const rtl_version_info_t *v = RTL_CHIP_VERSIONS;
+    while (v->version_code && v->version_code != (tcr1 & VERSION_MASK)) v++;
+    return v;
+}
+
+void rtl_read_version(rtl_dev_t *dev) {
+    uint16_t tcr1 = 0;
+    dev->revision_known = rtl_ocp_read_word(dev, MCU_TYPE_PLA, PLA_TCR1, &tcr1) == 0;
+    dev->version_raw = tcr1 & VERSION_MASK;
+    dev->version_info = lookup_version(tcr1);
 }
 
 int rtl_open_device(rtl_dev_t *dev) {
     if (!dev || !dev->service) return -1;
+    if (rtl_is_8157_usb_id(dev->vid, dev->pid) && dev->version_info &&
+        dev->version_info->family != CHIP_RTL8157) {
+        if (dev->revision_known)
+            fprintf(stderr, "Error: Unsupported revision 0x%04x for RTL8157 USB ID %04x:%04x.\n",
+                    dev->version_raw, dev->vid, dev->pid);
+        else
+            fprintf(stderr, "Error: Could not read the RTL8157 hardware revision.\n");
+        return -1;
+    }
     if (dev->dev_interface) return 0;
 
     IOCFPlugInInterface **plugin = NULL;
@@ -126,9 +144,9 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
             CFRelease(pidRef);
         }
 
-        if (vid == REALTEK_VID && (pid == PID_RTL8156 || pid == PID_RTL8153 ||
-                                   pid == PID_RTL8152 || pid == PID_RTL8157 ||
-                                   pid == PID_RTL8155)) {
+        if (rtl_is_8157_usb_id(vid, pid) ||
+            (vid == REALTEK_VID && (pid == PID_RTL8156 || pid == PID_RTL8153 ||
+                                    pid == PID_RTL8152 || pid == PID_RTL8155))) {
             if (count >= capacity) {
                 capacity *= 2;
                 rtl_dev_t *new_list = realloc(list, capacity * sizeof(rtl_dev_t));
@@ -162,8 +180,10 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
             if (speedRef) {
                 if (CFGetTypeID(speedRef) == CFNumberGetTypeID()) {
                     int64_t bps;
-                    if (CFNumberGetValue((CFNumberRef)speedRef, kCFNumberSInt64Type, &bps) && bps > 0)
+                    if (CFNumberGetValue((CFNumberRef)speedRef, kCFNumberSInt64Type, &bps) && bps > 0) {
+                        entry->usb_bps = bps;
                         snprintf(entry->usb_speed, sizeof(entry->usb_speed), "%g Mbps", bps / 1000000.0);
+                    }
                 }
                 CFRelease(speedRef);
             }
@@ -195,14 +215,8 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
 
             /* Open briefly to read chip version and MAC address */
             if (rtl_open_device(entry) == 0) {
-                uint16_t tcr1;
                 uint32_t mac_l, mac_h;
-                entry->version_info = lookup_version_info(0);
-                if (rtl_ocp_read_word(entry, MCU_TYPE_PLA, PLA_TCR1, &tcr1) == 0) {
-                    entry->revision_known = true;
-                    entry->version_raw = tcr1 & VERSION_MASK;
-                    entry->version_info = lookup_version_info(entry->version_raw);
-                }
+                rtl_read_version(entry);
                 if (rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR, &mac_l) == 0 &&
                     rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR + 4, &mac_h) == 0) {
                     snprintf(entry->mac_address, sizeof(entry->mac_address),
@@ -212,7 +226,7 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
 
                 rtl_close_device(entry);
             } else {
-                entry->version_info = lookup_version_info(0);
+                entry->version_info = lookup_version(0);
             }
 
             count++;
@@ -380,12 +394,60 @@ static int rtl_select_ocp_page(rtl_dev_t *dev, uint16_t addr) {
     return 0;
 }
 
+static int wait_usb_command(rtl_dev_t *dev, uint16_t command) {
+    for (int i = 0; i < 10; i++) {
+        uint16_t value;
+        if (rtl_ocp_read_word(dev, MCU_TYPE_USB, command, &value) != 0) return -1;
+        if (!(value & CMD_BUSY)) return 0;
+        usleep(1000);
+    }
+    fprintf(stderr, "Error: USB command at 0x%04x remained busy.\n", command);
+    return -1;
+}
+
+static int issue_usb_command(rtl_dev_t *dev, uint16_t command, uint16_t flags) {
+    if (rtl_ocp_write_word(dev, MCU_TYPE_USB, command, flags | CMD_BUSY) != 0) return -1;
+    return wait_usb_command(dev, command);
+}
+
+int rtl_adv_read(rtl_dev_t *dev, uint16_t space, uint16_t addr, uint32_t *out) {
+    if (!out || !dev || !dev->version_info || dev->version_info->family != CHIP_RTL8157 ||
+        (space != ADV_CMD_IP && space != ADV_CMD_BMU)) return -1;
+    if (wait_usb_command(dev, USB_ADV_CMD) != 0 ||
+        rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_ADV_ADDR, addr) != 0 ||
+        issue_usb_command(dev, USB_ADV_CMD, space) != 0) return -1;
+    return rtl_ocp_read_dword(dev, MCU_TYPE_USB, USB_ADV_DATA, out);
+}
+
+int rtl_adv_write(rtl_dev_t *dev, uint16_t space, uint16_t addr, uint32_t value) {
+    if (!dev || !dev->version_info || dev->version_info->family != CHIP_RTL8157 ||
+        (space != ADV_CMD_IP && space != ADV_CMD_BMU)) return -1;
+    if (wait_usb_command(dev, USB_ADV_CMD) != 0 ||
+        rtl_ocp_write_dword(dev, MCU_TYPE_USB, USB_ADV_DATA, value) != 0 ||
+        rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_ADV_ADDR, addr) != 0) return -1;
+    return issue_usb_command(dev, USB_ADV_CMD, space | CMD_WRITE);
+}
+
 int rtl_ocp_reg_read(rtl_dev_t *dev, uint16_t addr, uint16_t *out) {
-    if (!out || rtl_select_ocp_page(dev, addr) != 0) return -1;
+    if (!dev || !out) return -1;
+    if (dev->version_info && dev->version_info->family == CHIP_RTL8157) {
+        if (wait_usb_command(dev, USB_TGPHY_CMD) != 0 ||
+            rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_TGPHY_ADDR, addr) != 0 ||
+            issue_usb_command(dev, USB_TGPHY_CMD, 0) != 0) return -1;
+        return rtl_ocp_read_word(dev, MCU_TYPE_USB, USB_TGPHY_DATA, out);
+    }
+    if (rtl_select_ocp_page(dev, addr) != 0) return -1;
     return rtl_ocp_read_word(dev, MCU_TYPE_PLA, (addr & 0x0fff) | 0xb000, out);
 }
 
 int rtl_ocp_reg_write(rtl_dev_t *dev, uint16_t addr, uint16_t data) {
+    if (!dev) return -1;
+    if (dev->version_info && dev->version_info->family == CHIP_RTL8157) {
+        if (wait_usb_command(dev, USB_TGPHY_CMD) != 0 ||
+            rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_TGPHY_DATA, data) != 0 ||
+            rtl_ocp_write_word(dev, MCU_TYPE_USB, USB_TGPHY_ADDR, addr) != 0) return -1;
+        return issue_usb_command(dev, USB_TGPHY_CMD, CMD_WRITE);
+    }
     if (rtl_select_ocp_page(dev, addr) != 0) return -1;
     return rtl_ocp_write_word(dev, MCU_TYPE_PLA, (addr & 0x0fff) | 0xb000, data);
 }

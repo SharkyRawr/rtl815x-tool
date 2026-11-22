@@ -31,7 +31,7 @@
 /* PLA (Platform) Registers */
 #define PLA_IDR                 0xc000   /* MAC Address (6 bytes) */
 #define PLA_RCR                 0xc010   /* Receive Configuration Register */
-#define PLA_RMS                 0xc014   /* Rx Packet Max Size */
+#define PLA_RMS                 0xc016   /* Rx Packet Max Size */
 #define PLA_RXFIFO_CTRL0        0xc0a0
 #define PLA_RXFIFO_CTRL1        0xc0a4
 #define PLA_RXFIFO_CTRL2        0xc0a8
@@ -59,7 +59,7 @@
 #define PLA_MISC_1              0xe014
 #define PLA_OCP_GPHY_BASE       0xe86c   /* Base address for GPHY register bank */
 #define PLA_TALLYCNT            0xe890   /* Hardware Tally Counters */
-#define PLA_RSTTALLY            0xe89c   /* Reset Tally Counters */
+#define PLA_RSTTALLY            0xe800   /* Reset Tally Counters */
 #define PLA_TALLY               0xe080   /* Legacy Tally offset */
 
 #define PLA_EEE_CR              0xe040   /* Energy Efficient Ethernet Control */
@@ -87,6 +87,24 @@
 #define USB_SSPHYLPM_CNTR       0xc40e
 #define USB_PHY_PWR             0xc400
 #define USB_PM_CTRL_STATUS      0xd414
+
+/* RTL8157 indirect USB commands. */
+#define USB_TGPHY_ADDR          0xd630
+#define USB_TGPHY_DATA          0xd632
+#define USB_TGPHY_CMD           0xd634
+#define USB_ADV_ADDR            0xd5d6
+#define USB_ADV_DATA            0xd5d8
+#define USB_ADV_CMD             0xd5dc
+#define CMD_BUSY                0x0001
+#define CMD_WRITE               0x0002
+#define ADV_CMD_BMU             0x0000
+#define ADV_CMD_IP              0x0004
+#define IP_U2P3_CTRL            0xc2c0
+#define U2P3_ENABLE             (1u << 29)
+#define USB_LPM_CONFIG          0xcfd8
+#define LPM_U1U2_EN             0x0001
+#define USB_POWER_CUT           0xd80a
+#define UPS_EN                  0x0010
 
 /* GPHY / MII Registers (Bank Base: 0xa400) */
 #define OCP_BASE_MII            0xa400
@@ -145,15 +163,16 @@
 #define LP_5000_FULL           0x0040
 
 /* Energy Efficient Ethernet (EEE) Registers */
-#define OCP_EEE_CFG             0xa430
+#define OCP_EEE_CFG             0xa432
+#define EEE10_EN                0x0010
 #define OCP_EEE_ADV             0xa5d0   /* 100M/1G EEE Advertisement */
 #define OCP_EEE_LPABLE          0xa5d2   /* 100M/1G EEE Link Partner Ability */
 #define OCP_EEE_ADV2            0xa6d4   /* 2.5G/5G EEE Advertisement */
-#define OCP_EEE_LPABLE2         0xa6d6   /* 2.5G/5G EEE Link Partner Ability */
+#define OCP_EEE_LPABLE2         0xa6d0   /* 2.5G/5G EEE Link Partner Ability */
 
 /* PLA_EEE_CR Bits */
-#define EEE_TX_EN               0x0001
-#define EEE_RX_EN               0x0002
+#define EEE_TX_EN               0x0002
+#define EEE_RX_EN               0x0001
 
 /* Chip Version Detection (PLA_TCR1 & 0x7cf0) */
 #define VERSION_MASK            0x7cf0
@@ -194,9 +213,7 @@ static const rtl_version_info_t RTL_CHIP_VERSIONS[] = {
     { 0x7070, CHIP_RTL8156B, "RTL8156B",  "v3 (2.5GbE)",       2500 },
     { 0x7400, CHIP_RTL8156B, "RTL8156B",  "v1-alt (2.5GbE)",   2500 },
     { 0x7410, CHIP_RTL8156B, "RTL8156B",  "v2-alt/BG (2.5GbE)", 2500 },
-    { 0x7440, CHIP_RTL8157,  "RTL8157",   "v1 (5GbE)",         5000 },
-    { 0x7450, CHIP_RTL8157,  "RTL8157",   "v2 (5GbE)",         5000 },
-    { 0x7460, CHIP_RTL8157,  "RTL8157",   "v3 (5GbE)",         5000 },
+    { 0x1030, CHIP_RTL8157,  "RTL8157",   "RTL_VER_16 (5GbE)", 5000 },
     { 0x0000, CHIP_UNKNOWN,  "Unknown Realtek", "Unknown",        0 }
 };
 
