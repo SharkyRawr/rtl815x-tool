@@ -16,6 +16,7 @@ static uint16_t get_word(int bank, uint16_t addr) {
     return registers[bank][addr] | ((uint16_t)registers[bank][addr + 1] << 8);
 }
 static uint16_t page;
+static uint16_t mmd_reg, mmd_ctrl, mmd_an[64];
 static int transfers, fail_at, short_at, enumerations;
 static int discovery_count, discovery_error;
 static double slept_seconds;
@@ -41,6 +42,17 @@ static IOReturn request(void *self, IOUSBDevRequest *req) {
         bank = 2;
         address = page | (address & 0xfff);
     }
+    if (bank == PHY && fixture.version_info) {
+        uint32_t speed = fixture.version_info->max_speed_mbps;
+        assert(speed >= 1000 || (address != 0xa410 && address != 0xa414 &&
+                                 address != 0xa5d0 && address != 0xa430));
+        assert(speed >= 2500 || (address != 0xa6d4 && address != 0xa6d0 && address != 0xa5d4));
+    }
+    if (bank == PHY && address == 0xa41c && req->bmRequestType == 0xc0) {
+        assert((mmd_ctrl == 0x4007 || (mmd_ctrl == 0x4003 && mmd_reg == 20)) && mmd_reg < 64);
+        registers[PHY][address] = mmd_an[mmd_reg] & 0xff;
+        registers[PHY][address + 1] = mmd_an[mmd_reg] >> 8;
+    }
     if (req->bmRequestType == 0xc0) {
         if (bank == USB && (address == 0xd634 || address == 0xd5dc) &&
             (registers[USB][address] & 1) && !hold_command && busy_reads-- == 0)
@@ -50,6 +62,16 @@ static IOReturn request(void *self, IOUSBDevRequest *req) {
         uint8_t *data = req->pData;
         for (int i = 0; i < req->wLength; i++) {
             if (req->wIndex & (1 << (i % 4))) registers[bank][address + i] = data[i];
+        }
+        if (bank == PHY && address == 0xa418 && req->wIndex == 0x1cc)
+            mmd_ctrl = get_word(PHY, 0xa41a);
+        if (bank == PHY && address == 0xa41c) {
+            assert(mmd_ctrl == 3 || mmd_ctrl == 7 || mmd_ctrl == 0x4007);
+            if (mmd_ctrl == 7 || mmd_ctrl == 3) mmd_reg = get_word(PHY, address);
+            else {
+                assert(mmd_reg < 64);
+                mmd_an[mmd_reg] = get_word(PHY, address);
+            }
         }
         if (bank == USB && (address == 0xd634 || address == 0xd5dc)) {
             uint16_t cmd = get_word(USB, address);
@@ -94,15 +116,29 @@ static void reset_fixture(void) {
     slept_seconds = 0;
     sleep_calls = 0;
     stop_after = 1;
-    page = 0;
+    page = mmd_ctrl = mmd_reg = 0;
+    memset(mmd_an, 0, sizeof(mmd_an));
     hold_command = false;
     busy_reads = 0;
     fixture = (rtl_dev_t){ .dev_interface = &interface_ptr, .service = 1,
-        .ocp_base = 0xffff };
+        .ocp_base = 0xffff, .usb_bps = 5000000000LL };
     probe_revision(0x7410);
+    mmd_an[20] = 2;
+    put_word(PHY, 0xa5c4, 6);
+    put_word(PHY, 0xa6ec, 3);
     strcpy(fixture.bsd_name, "en-test");
     put_word(2, 0xa402, BMSR_LSTATUS | BMSR_ANEGCOMPLETE);
     put_word(0, 0xe908, 0x0403); /* Resolved 2.5G full duplex. */
+}
+
+static void reset_8152(void) {
+    reset_fixture();
+    probe_revision(0x4c10);
+}
+
+static void reset_8153(void) {
+    reset_fixture();
+    probe_revision(0x5c20);
 }
 
 static void reset_8157(void) {
@@ -232,15 +268,14 @@ static int eee_off(rtl_dev_t *dev) { return rtl_eee_set(dev, false); }
 static int eee_on(rtl_dev_t *dev) { return rtl_eee_set(dev, true); }
 static int power_off(rtl_dev_t *dev) { return rtl_power_set_no_sleep(dev, true); }
 static int power_on(rtl_dev_t *dev) { return rtl_power_set_no_sleep(dev, false); }
-static int led_off(rtl_dev_t *dev) { return rtl_led_set_mode(dev, "off"); }
+static int led_default(rtl_dev_t *dev) { return rtl_led_set_mode(dev, "default"); }
 static int raw_write(rtl_dev_t *dev) { return cmd_reg_write(dev, "pla", "c000", "1234", "16"); }
 
 static void test_mutation_failures(void (*reset)(void)) {
     int (*operations[])(rtl_dev_t *) = {eee_off, eee_on, power_off, power_on,
-        led_off, rtl_tally_reset, rtl_diag_restart_an, raw_write};
+        led_default, rtl_tally_reset, rtl_diag_restart_an, raw_write};
     for (size_t i = 0; i < sizeof(operations)/sizeof(*operations); i++) {
         reset();
-        if (operations[i] == led_off && fixture.version_info->family == CHIP_RTL8157) continue;
         capture_start();
         assert(operations[i](&fixture) == 0);
         capture_end();
@@ -273,11 +308,12 @@ static void test_status_identity(void) {
     reset_fixture();
     fixture.revision_known = false;
     char *args[] = {"test", "status", NULL};
-    assert(cli(2, args) == 0);
+    assert(cli(2, args) == 1 && transfers == 0);
     assert(strstr(output, "en-test (Driver: dont know)"));
     assert(strstr(output, "USB Bus Speed    : dont know"));
     assert(strstr(output, "Hardware MAC     : dont know"));
     assert(strstr(output, "Revision Code    : dont know"));
+    probe_revision(0x7410);
     strcpy(fixture.driver, "example.dext.Ethernet");
     fail_at = 1;
     transfers = 0;
@@ -290,6 +326,7 @@ static void test_speed(void) {
     const char *speeds[] = {"Link Down", "10 Mbps", "100 Mbps", "1.0 Gbps", "2.5 Gbps", "5.0 Gbps"};
     for (size_t i = 0; i < sizeof(statuses)/sizeof(*statuses); i++) {
         reset_fixture();
+        if (i == 5) reset_8157();
         put_word(0, 0xe908, statuses[i]);
         /* Advertise gigabit AND 2.5G regardless of the resolved speed. */
         put_word(2, 0xa412, 0x0200);
@@ -322,12 +359,10 @@ static void test_speed(void) {
 
 static void test_diagnostic_reports(void) {
     reset_fixture();
-    static const rtl_version_info_t unknown = {.name = "unknown", .revision_str = "unknown"};
-    fixture.version_info = &unknown;
+    probe_revision(0xffff);
     char *phy[] = {"test", "phy", NULL};
-    assert(cli(2, phy) == 0);
-    assert(strstr(output, "2.5GBASE-T Full        | dont know        | dont know"));
-    assert(strstr(output, "5GBASE-T Full          | dont know        | dont know"));
+    assert(cli(2, phy) != 0 && transfers == 0);
+    reset_fixture();
 
     char *status[] = {"test", "status", NULL};
     put_word(2, OCP_BASE_MII + 2 * MII_ADVERTISE, 0x0800);
@@ -355,9 +390,9 @@ static void test_diagnostic_reports(void) {
     assert(strstr(output, "0xbeef"));
 
     char *power[] = {"test", "power", "default", NULL};
-    assert(cli(3, power) == 0 && strstr(output, "UPS and LPM control bits set"));
+    assert(cli(3, power) == 0 && strstr(output, "U1/U2 Enabled"));
     power[2] = "status";
-    assert(cli(3, power) == 0 && strstr(output, "UPS Enabled") && strstr(output, "LPM Enabled"));
+    assert(cli(3, power) == 0 && strstr(output, "U1/U2 (USB 0xcfd8): Enabled") && strstr(output, "U2 to P3 (USB 0xb460): Enabled"));
 
     char *restart[] = {"test", "phy", "--restart-an", NULL};
     assert(cli(3, restart) == 0 && strstr(output, "Timed out waiting for link-up"));
@@ -429,6 +464,137 @@ static void test_watch(void) {
     assert(cli(3, args) == 1 && enumerations == 0);
 }
 
+static void test_chipset_matrix(void) {
+    static const struct {
+        uint16_t code;
+        rtl_chip_family_t family;
+        unsigned speed;
+    } cases[] = {
+        {0x4c00, CHIP_RTL8152B, 100}, {0x4c10, CHIP_RTL8152B, 100},
+        {0x5c00, CHIP_RTL8153A, 1000}, {0x5c10, CHIP_RTL8153A, 1000},
+        {0x5c20, CHIP_RTL8153A, 1000}, {0x5c30, CHIP_RTL8153A, 1000},
+        {0x6000, CHIP_RTL8153B, 1000}, {0x6010, CHIP_RTL8153B, 1000},
+        {0x6400, CHIP_RTL8153C, 1000},
+        {0x7020, CHIP_RTL8156A, 2500}, {0x7030, CHIP_RTL8156A, 2500},
+        {0x7050, CHIP_RTL8156A, 2500}, {0x7060, CHIP_RTL8156A, 2500},
+        {0x7070, CHIP_RTL8156A, 2500},
+        {0x7400, CHIP_RTL8156B, 2500}, {0x7410, CHIP_RTL8156B, 2500},
+        {0x1030, CHIP_RTL8157, 5000}
+    };
+    char *status[] = {"test", "status", NULL};
+    char *phy[] = {"test", "phy", NULL};
+    char *eee[] = {"test", "eee", "status", NULL};
+    char *power[] = {"test", "power", "default", NULL};
+    char *led[] = {"test", "led", "set", "default", NULL};
+    char *stats[] = {"test", "stats", "--json", NULL};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        reset_fixture();
+        probe_revision(cases[i].code | 0x8007);
+        unsigned speed = cases[i].speed;
+        fixture.vid = REALTEK_VID;
+        fixture.pid = speed == 100 ? PID_RTL8152 : speed == 1000 ? PID_RTL8153 :
+                      speed == 2500 ? PID_RTL8156 : PID_RTL8157;
+        assert(fixture.version_raw == cases[i].code && fixture.version_info->family == cases[i].family);
+        assert(fixture.version_info->max_speed_mbps == speed);
+        put_word(PLA, 0xe908, speed == 100 ? 0xb : speed == 1000 ? 0x13 : speed == 2500 ? 0x403 : 0x1003);
+        assert(cli(2, status) == 0);
+        const char *negotiated = strstr(output, "Negotiated Speed");
+        assert(negotiated && strstr(negotiated, speed == 100 ? "100 Mbps" : speed == 1000 ? "1.0 Gbps" :
+                                    speed == 2500 ? "2.5 Gbps" : "5.0 Gbps"));
+        assert(cli(2, phy) == 0);
+        assert((strstr(output, "1000BASE-T Full") != NULL) == (speed >= 1000));
+        assert((strstr(output, "2.5GBASE-T Full") != NULL) == (speed >= 2500));
+        assert((strstr(output, "   5GBASE-T Full") != NULL) == (speed >= 5000));
+        eee[2] = "enable";
+        assert(cli(3, eee) == 0 && (get_word(PLA, 0xe040) & 3) == 3);
+        eee[2] = "status";
+        assert(cli(3, eee) == 0);
+        assert((strstr(output, "1000BASE-T EEE") != NULL) == (speed >= 1000));
+        assert((strstr(output, "2.5GBASE-T EEE") != NULL) == (speed >= 2500));
+        assert((strstr(output, "   5GBASE-T EEE") != NULL) == (speed >= 5000));
+        assert(cli(3, stats) == 0 && strstr(output, fixture.version_info->name));
+        char revision_field[32];
+        snprintf(revision_field, sizeof(revision_field), "\"revision_code\": \"0x%04x\"", cases[i].code);
+        assert(strstr(output, revision_field));
+        led[3] = "default";
+        assert(cli(4, led) == 0);
+        if (speed >= 2500) {
+            assert(get_word(PLA, 0xdd8a) == 0x0220 && get_word(PLA, 0xdd8c) == 0x0208);
+            assert(get_word(PLA, 0xdd8e) == (speed == 5000 ? 0x0203 : 0x0202));
+            assert(get_word(PLA, 0xdd90) == (speed == 5000 ? 0x0280 : 0x0201));
+        } else {
+            uint16_t packed = cases[i].family == CHIP_RTL8153C ? 0x0ca9 : speed == 100 ? 0x83 : 0x87;
+            assert(get_word(PLA, 0xdd90) == packed);
+        }
+        led[3] = "link-only";
+        transfers = 0;
+        if (cases[i].family == CHIP_RTL8156A || cases[i].family == CHIP_RTL8157 ||
+            cases[i].family == CHIP_RTL8153C) {
+            assert(cli(4, led) != 0 && transfers == 0);
+        } else {
+            put_word(PLA, 0xdd90, 0x1000);
+            assert(cli(4, led) == 0);
+            uint16_t link = speed == 2500 ? 0x002b : speed == 1000 ? 7 : 3;
+            assert(get_word(PLA, 0xdd90) == (0x1000 | link));
+        }
+        put_word(USB, 0xd496, 0xbeef);
+        put_word(USB, 0xb460, 0xf000);
+        assert(cli(3, power) == 0);
+        if (speed == 100) assert(get_word(PHY, 0x2010) == 0x8310);
+        if (speed == 1000 || speed == 2500) {
+            bool u2p3 = speed == 2500 || cases[i].code == 0x5c20 || cases[i].code == 0x5c30;
+            assert(get_word(USB, 0xb460) == (0xf000 | u2p3));
+            if (cases[i].family == CHIP_RTL8153A) {
+                assert(get_word(USB, 0xd490) == 0xffff && get_word(USB, 0xd494) == 0xffff);
+                assert(get_word(USB, 0xd496) == 0xbeef);
+            } else assert(get_word(USB, 0xcfd8) == 1);
+        }
+    }
+    const uint16_t unverified[] = {0x7040, 0x7440, 0x7770};
+    char *raw[] = {"test", "reg", "write", "pla", "c000", "abcd", NULL};
+    for (size_t i = 0; i < sizeof(unverified) / sizeof(*unverified); i++) {
+        reset_fixture();
+        probe_revision(unverified[i]);
+        assert(cli(2, status) != 0 && strstr(output, "Unsupported hardware revision"));
+        assert(cli(4, led) != 0 && cli(3, power) != 0 && cli(6, raw) != 0 && transfers == 0);
+    }
+    reset_8157();
+    probe_revision(0x7410);
+    assert(cli(6, raw) != 0 && transfers == 0);
+    assert(rtl_is_adapter_usb_id(0x17ef, 0x3082) && rtl_is_adapter_usb_id(0x413c, 0xb097));
+    assert(rtl_is_adapter_usb_id(0x0bda, 0x8052) && rtl_is_adapter_usb_id(0x0bda, 0x8056));
+    assert(!rtl_is_adapter_usb_id(0x1234, 0x8156) && !rtl_is_adapter_usb_id(0x0bda, 0x815a));
+}
+
+static void test_eee_registers(void) {
+    reset_8152();
+    mmd_an[60] = 0x80;
+    mmd_an[61] = 2;
+    put_word(PHY, 0x2080, 0x8000);
+    put_word(PHY, 0x2092, 1);
+    put_word(PHY, 0x2094, 0x55);
+    char *eee[] = {"test", "eee", "enable", NULL};
+    assert(cli(3, eee) == 0);
+    assert(mmd_an[60] == 0x82 && mmd_ctrl == 0 && get_word(PHY, 0x2080) == 0xb310);
+    assert(get_word(PHY, 0x2092) == 0x601 && get_word(PHY, 0x2094) == ((42 << 7) | 0x55));
+    eee[2] = "status";
+    assert(cli(3, eee) == 0 && strstr(output, "100BASE-TX EEE         | Yes              | Yes"));
+    eee[2] = "disable";
+    assert(cli(3, eee) == 0 && mmd_ctrl == 0 && mmd_an[60] == 0x80);
+    assert(get_word(PHY, 0x2080) == 0x8070 && get_word(PHY, 0x2092) == 1 && get_word(PHY, 0x2094) == 0xffd5);
+
+    reset_fixture();
+    probe_revision(0x7020);
+    put_word(PHY, 0xa5c4, 2);
+    put_word(PHY, 0xa6ec, 0);
+    put_word(PHY, 0xa6d4, 0x8101);
+    eee[2] = "enable";
+    assert(cli(3, eee) == 0 && get_word(PHY, 0xa5d0) == 2 && get_word(PHY, 0xa6d4) == 0x8100);
+    put_word(PHY, 0xa5c4, 0);
+    put_word(PLA, 0xe040, 0x4000);
+    assert(cli(3, eee) != 0 && get_word(PLA, 0xe040) == 0x4000);
+}
+
 static void test_8157(void) {
     reset_8157();
     assert(fixture.version_info->family == CHIP_RTL8157 && fixture.version_info->max_speed_mbps == 5000);
@@ -451,7 +617,7 @@ static void test_8157(void) {
     char *power[] = {"test", "power", "no-sleep", NULL};
     char *stats[] = {"test", "stats", "--json", NULL};
     char *watch[] = {"test", "watch", NULL};
-    assert(cli(2, list) == 0 && strstr(output, "RTL8157"));
+    assert(cli(2, list) == 0 && strstr(output, "RTL8157 | Revision: 0x1030"));
     put_word(PLA, 0xc016, 9018);
     assert(cli(2, status) == 0 && strstr(output, "5.0 Gbps") && strstr(output, "9018 bytes"));
     put_word(PHY, 0xa5d4, 0x0100);
@@ -509,9 +675,10 @@ static void test_8157(void) {
     assert(cli(6, raw) == 0 && strstr(output, "00 12"));
     char *led[] = {"test", "led", "status", NULL};
     transfers = 0;
-    assert(cli(3, led) != 0 && strstr(output, "selector register mapping unknown"));
+    assert(cli(3, led) == 0 && strstr(output, "Selector 0 (PLA 0xdd8a)"));
     led[2] = "0x1234";
-    assert(cli(3, led) != 0 && transfers == 0);
+    assert(cli(3, led) == 0 && get_word(PLA, 0xdd90) == 0x1234);
+    transfers = 0;
     raw[2] = "write";
     raw[3] = "ip";
     raw[4] = "10000";
@@ -536,12 +703,16 @@ static void test_8157_busy(void) {
 
 int main(void) {
     char *help[] = {"test", "--help", NULL};
-    assert(cli(2, help) == 0 && strstr(output, "v1.0.4"));
+    assert(cli(2, help) == 0 && strstr(output, "v1.0.5"));
+    test_chipset_matrix();
+    test_eee_registers();
     test_8157();
     test_8157_busy();
     test_selection();
     test_transfers();
     test_mutation_failures(reset_fixture);
+    test_mutation_failures(reset_8152);
+    test_mutation_failures(reset_8153);
     test_mutation_failures(reset_8157);
     test_status_identity();
     test_speed();

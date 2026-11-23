@@ -69,13 +69,17 @@
 #define PLA_MAC_PWR_CTRL3       0xe0c4
 #define PLA_MAC_PWR_CTRL4       0xe0c6
 #define PLA_WDT64_CTRL          0xe0c8
+#define PLA_LEDSEL_MULTI        0xdd8a   /* Four 16-bit selectors */
 #define PLA_LEDSEL              0xdd90   /* LED Select */
 #define PLA_LED_FEATURE         0xdd92   /* LED Feature */
 #define PLA_GPHY_CTRL           0xd300
 
 /* USB Registers */
-#define USB_DEV_STAT            0xd400
-#define USB_UPS_CTRL            0xd404   /* Ultra Power Saving Control */
+#define USB_TOLERANCE           0xd490
+#define USB_U2P3_CTRL           0xb460
+#define USB_U2P3_ENABLE         0x0001
+#define OCP_ALDPS_CONFIG        0x2010
+#define ENPWRSAVE               0x8000
 #define USB_USB_CTRL            0xd406
 #define USB_ECM_OPTION          0xd408
 #define USB_C21_CTRL            0xd40a
@@ -83,7 +87,6 @@
 #define USB_USB_SPEC            0xd40e
 #define USB_CONNECT_TIMER       0xc3fc
 #define USB_BURST_SIZE          0xc402
-#define USB_LPM_CTRL            0xc40c   /* Link Power Management */
 #define USB_SSPHYLPM_CNTR       0xc40e
 #define USB_PHY_PWR             0xc400
 #define USB_PM_CTRL_STATUS      0xd414
@@ -163,8 +166,15 @@
 #define LP_5000_FULL           0x0040
 
 /* Energy Efficient Ethernet (EEE) Registers */
+#define OCP_EEE_CONFIG1         0x2080
+#define OCP_EEE_CONFIG2         0x2092
+#define OCP_EEE_CONFIG3         0x2094
+#define OCP_EEE_AR              0xa41a
+#define OCP_EEE_DATA            0xa41c
 #define OCP_EEE_CFG             0xa432
 #define EEE10_EN                0x0010
+#define OCP_EEE_ABLE            0xa5c4
+#define OCP_EEE_ABLE2           0xa6ec
 #define OCP_EEE_ADV             0xa5d0   /* 100M/1G EEE Advertisement */
 #define OCP_EEE_LPABLE          0xa5d2   /* 100M/1G EEE Link Partner Ability */
 #define OCP_EEE_ADV2            0xa6d4   /* 2.5G/5G EEE Advertisement */
@@ -179,7 +189,6 @@
 
 typedef enum {
     CHIP_UNKNOWN = 0,
-    CHIP_RTL8152A,
     CHIP_RTL8152B,
     CHIP_RTL8153A,
     CHIP_RTL8153B,
@@ -198,22 +207,24 @@ typedef struct {
 } rtl_version_info_t;
 
 static const rtl_version_info_t RTL_CHIP_VERSIONS[] = {
-    { 0x4c00, CHIP_RTL8152A, "RTL8152A",  "v1 (10/100M)",       100 },
-    { 0x4c10, CHIP_RTL8152B, "RTL8152B",  "v2 (10/100M)",       100 },
-    { 0x5c00, CHIP_RTL8153A, "RTL8153A",  "v1 (1GbE)",         1000 },
-    { 0x5c10, CHIP_RTL8153A, "RTL8153A",  "v2 (1GbE)",         1000 },
-    { 0x5c20, CHIP_RTL8153B, "RTL8153B",  "v1 (1GbE)",         1000 },
-    { 0x5c30, CHIP_RTL8153B, "RTL8153B",  "v2 (1GbE)",         1000 },
-    { 0x6000, CHIP_RTL8153C, "RTL8153C",  "v1 (1GbE)",         1000 },
-    { 0x6010, CHIP_RTL8153C, "RTL8153C",  "v2 (1GbE)",         1000 },
-    { 0x7020, CHIP_RTL8156A, "RTL8156A",  "v1 (2.5GbE)",       2500 },
-    { 0x7030, CHIP_RTL8156A, "RTL8156A",  "v2 (2.5GbE)",       2500 },
-    { 0x7050, CHIP_RTL8156B, "RTL8156B",  "v1 (2.5GbE)",       2500 },
-    { 0x7060, CHIP_RTL8156B, "RTL8156B",  "v2 (2.5GbE)",       2500 },
-    { 0x7070, CHIP_RTL8156B, "RTL8156B",  "v3 (2.5GbE)",       2500 },
-    { 0x7400, CHIP_RTL8156B, "RTL8156B",  "v1-alt (2.5GbE)",   2500 },
-    { 0x7410, CHIP_RTL8156B, "RTL8156B",  "v2-alt/BG (2.5GbE)", 2500 },
-    { 0x1030, CHIP_RTL8157,  "RTL8157",   "RTL_VER_16 (5GbE)", 5000 },
+    { 0x4c00, CHIP_RTL8152B, "RTL8152B", "RTL_VER_01", 100 },
+    { 0x4c10, CHIP_RTL8152B, "RTL8152B", "RTL_VER_02", 100 },
+    { 0x5c00, CHIP_RTL8153A, "RTL8153A", "RTL_VER_03", 1000 },
+    { 0x5c10, CHIP_RTL8153A, "RTL8153A", "RTL_VER_04", 1000 },
+    { 0x5c20, CHIP_RTL8153A, "RTL8153A", "RTL_VER_05", 1000 },
+    { 0x5c30, CHIP_RTL8153A, "RTL8153A", "RTL_VER_06", 1000 },
+    { 0x6000, CHIP_RTL8153B, "RTL8153B", "RTL_VER_08", 1000 },
+    { 0x6010, CHIP_RTL8153B, "RTL8153B", "RTL_VER_09", 1000 },
+    { 0x6400, CHIP_RTL8153C, "RTL8153C", "RTL_VER_14", 1000 },
+    { 0x7020, CHIP_RTL8156A, "RTL8156A", "RTL_VER_10", 2500 },
+    { 0x7030, CHIP_RTL8156A, "RTL8156A", "RTL_VER_11", 2500 },
+    /* rtu56cx22x64 dispatches these through the same ops as 0x7030. */
+    { 0x7050, CHIP_RTL8156A, "RTL8156", "Windows family match", 2500 },
+    { 0x7060, CHIP_RTL8156A, "RTL8156", "Windows family match", 2500 },
+    { 0x7070, CHIP_RTL8156A, "RTL8156", "Windows family match", 2500 },
+    { 0x7400, CHIP_RTL8156B, "RTL8156B", "RTL_VER_12", 2500 },
+    { 0x7410, CHIP_RTL8156B, "RTL8156B", "RTL_VER_13", 2500 },
+    { 0x1030, CHIP_RTL8157, "RTL8157", "RTL_VER_16", 5000 },
     { 0x0000, CHIP_UNKNOWN,  "Unknown Realtek", "Unknown",        0 }
 };
 

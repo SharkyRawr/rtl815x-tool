@@ -29,6 +29,7 @@ typedef struct {
 } rtl_dev_t;
 
 /* Device Enumeration & Lifecycle */
+bool rtl_is_adapter_usb_id(uint16_t vid, uint16_t pid);
 bool rtl_is_8157_usb_id(uint16_t vid, uint16_t pid);
 void rtl_read_version(rtl_dev_t *dev);
 int rtl_find_devices(rtl_dev_t **out_devices, int *out_count);

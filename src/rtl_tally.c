@@ -67,6 +67,7 @@ int rtl_tally_print_stats(rtl_dev_t *dev, bool json_format) {
         printf("  \"adapter\": {\n");
         printf("    \"chip\": \"%s\",\n", dev->version_info->name);
         printf("    \"revision\": \"%s\",\n", dev->version_info->revision_str);
+        printf("    \"revision_code\": \"0x%04x\",\n", dev->version_raw);
         printf("    \"bsd_interface\": \"%s\",\n", dev->bsd_name);
         printf("    \"mac_address\": \"%s\",\n",
                dev->mac_address[0] ? dev->mac_address : "dont know");

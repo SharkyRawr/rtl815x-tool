@@ -27,7 +27,8 @@ static bool find_network_interface(io_service_t current, rtl_dev_t *dev) {
     while ((child = IOIteratorNext(iter)) != 0) {
         found = find_network_interface(child, dev);
         /* Only identify the controller bound to USB on this interface's branch. */
-        if (found && (current == dev->service || IOObjectConformsTo(current, "IOUSBHostInterface")) &&
+        if (found && (current == dev->service || IOObjectConformsTo(current, "IOUSBHostInterface") ||
+                      IOObjectConformsTo(current, "AppleUSBNCMControl")) &&
             (IOObjectConformsTo(child, "IOUserNetworkEthernet") ||
              IOObjectConformsTo(child, "IONetworkController"))) {
             if (!read_string_property(child, CFSTR("IOUserServerName"), dev->driver, sizeof(dev->driver)))
@@ -47,6 +48,39 @@ bool rtl_is_8157_usb_id(uint16_t vid, uint16_t pid) {
            (vid == 0x1f9b && pid == 0x25c3);
 }
 
+/* Linux r8152 and Realtek Windows 11 USB LAN INFs, plus macOS PID 8154. */
+bool rtl_is_adapter_usb_id(uint16_t vid, uint16_t pid) {
+    static const struct { uint16_t vid, pid; } ids[] = {
+        {0x043e, 0x9819}, {0x043e, 0x9820}, {0x045e, 0x07ab}, {0x045e, 0x07c6},
+        {0x045e, 0x0927}, {0x045e, 0x0c5e}, {0x04e8, 0xa101}, {0x050d, 0x047a},
+        {0x050d, 0x048a}, {0x056e, 0x4013}, {0x056e, 0x4017}, {0x056e, 0x9013},
+        {0x065f, 0x3200}, {0x0781, 0xcffe}, {0x0930, 0x0416}, {0x0955, 0x09ff},
+        {0x0b05, 0x18d1}, {0x0b05, 0x1976}, {0x0b05, 0x1aed}, {0x0b05, 0x65f1},
+        {0x0bda, 0x8050}, {0x0bda, 0x8052}, {0x0bda, 0x8053}, {0x0bda, 0x8056},
+        {0x0bda, 0x8152}, {0x0bda, 0x8153}, {0x0bda, 0x8154}, {0x0bda, 0x8155},
+        {0x0bda, 0x8156}, {0x0df4, 0x0025}, {0x0f21, 0x8153}, {0x1025, 0x104e},
+        {0x1025, 0x184b}, {0x1025, 0x184c}, {0x103c, 0x8f77}, {0x13b1, 0x0041},
+        {0x14ff, 0x1400}, {0x17aa, 0x6117}, {0x17ef, 0x304f}, {0x17ef, 0x3052},
+        {0x17ef, 0x3054}, {0x17ef, 0x3057}, {0x17ef, 0x3062}, {0x17ef, 0x3065},
+        {0x17ef, 0x3069}, {0x17ef, 0x3082}, {0x17ef, 0x3083}, {0x17ef, 0x3098},
+        {0x17ef, 0x309b}, {0x17ef, 0x309c}, {0x17ef, 0x309d}, {0x17ef, 0x30fa},
+        {0x17ef, 0x7205}, {0x17ef, 0x720a}, {0x17ef, 0x720b}, {0x17ef, 0x720c},
+        {0x17ef, 0x7214}, {0x17ef, 0x721e}, {0x17ef, 0x8153}, {0x17ef, 0xa359},
+        {0x17ef, 0xa387}, {0x17ef, 0xa3c1}, {0x1949, 0x1300}, {0x1a56, 0x3100},
+        {0x2001, 0x7e34}, {0x2001, 0xa710}, {0x2001, 0xb301}, {0x2001, 0xb302},
+        {0x208e, 0xd003}, {0x20f4, 0xe02b}, {0x20f4, 0xe02c}, {0x2357, 0x0601},
+        {0x2357, 0x0602}, {0x2357, 0x0603}, {0x2357, 0x0604}, {0x2655, 0x8153},
+        {0x2717, 0x0011}, {0x2b73, 0x0007}, {0x2b73, 0x0031}, {0x2baf, 0x0012},
+        {0x2d01, 0x0030}, {0x2d01, 0x0031}, {0x2d01, 0x0032}, {0x2d1c, 0x8153},
+        {0x30da, 0x5101}, {0x30f3, 0x0419}, {0x30f3, 0x0425}, {0x310e, 0x0060},
+        {0x310e, 0x0061}, {0x310e, 0x0062}, {0x413c, 0xb097},
+    };
+    if (rtl_is_8157_usb_id(vid, pid)) return true;
+    for (size_t i = 0; i < sizeof(ids) / sizeof(*ids); i++)
+        if (vid == ids[i].vid && pid == ids[i].pid) return true;
+    return false;
+}
+
 static const rtl_version_info_t *lookup_version(uint16_t tcr1) {
     const rtl_version_info_t *v = RTL_CHIP_VERSIONS;
     while (v->version_code && v->version_code != (tcr1 & VERSION_MASK)) v++;
@@ -60,17 +94,8 @@ void rtl_read_version(rtl_dev_t *dev) {
     dev->version_info = lookup_version(tcr1);
 }
 
-int rtl_open_device(rtl_dev_t *dev) {
+static int open_usb_interface(rtl_dev_t *dev) {
     if (!dev || !dev->service) return -1;
-    if (rtl_is_8157_usb_id(dev->vid, dev->pid) && dev->version_info &&
-        dev->version_info->family != CHIP_RTL8157) {
-        if (dev->revision_known)
-            fprintf(stderr, "Error: Unsupported revision 0x%04x for RTL8157 USB ID %04x:%04x.\n",
-                    dev->version_raw, dev->vid, dev->pid);
-        else
-            fprintf(stderr, "Error: Could not read the RTL8157 hardware revision.\n");
-        return -1;
-    }
     if (dev->dev_interface) return 0;
 
     IOCFPlugInInterface **plugin = NULL;
@@ -95,6 +120,20 @@ int rtl_open_device(rtl_dev_t *dev) {
     dev->dev_interface = intf;
     dev->ocp_base = 0xffff;
     return 0;
+}
+
+int rtl_open_device(rtl_dev_t *dev) {
+    if (!dev || !dev->service) return -1;
+    if (!dev->version_info || !dev->revision_known || dev->version_info->family == CHIP_UNKNOWN ||
+        (rtl_is_8157_usb_id(dev->vid, dev->pid) && dev->version_info->family != CHIP_RTL8157)) {
+        if (dev->revision_known)
+            fprintf(stderr, "Unsupported hardware revision 0x%04x for USB ID %04x:%04x.\n",
+                    dev->version_raw, dev->vid, dev->pid);
+        else
+            fprintf(stderr, "Could not read the hardware revision for USB ID %04x:%04x.\n", dev->vid, dev->pid);
+        return -1;
+    }
+    return open_usb_interface(dev);
 }
 
 void rtl_close_device(rtl_dev_t *dev) {
@@ -144,9 +183,7 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
             CFRelease(pidRef);
         }
 
-        if (rtl_is_8157_usb_id(vid, pid) ||
-            (vid == REALTEK_VID && (pid == PID_RTL8156 || pid == PID_RTL8153 ||
-                                    pid == PID_RTL8152 || pid == PID_RTL8155))) {
+        if (rtl_is_adapter_usb_id(vid, pid)) {
             if (count >= capacity) {
                 capacity *= 2;
                 rtl_dev_t *new_list = realloc(list, capacity * sizeof(rtl_dev_t));
@@ -214,7 +251,7 @@ int rtl_find_devices(rtl_dev_t **out_devices, int *out_count) {
             }
 
             /* Open briefly to read chip version and MAC address */
-            if (rtl_open_device(entry) == 0) {
+            if (open_usb_interface(entry) == 0) {
                 uint32_t mac_l, mac_h;
                 rtl_read_version(entry);
                 if (rtl_ocp_read_dword(entry, MCU_TYPE_PLA, PLA_IDR, &mac_l) == 0 &&

@@ -14,7 +14,7 @@
 #include "rtl_led.h"
 
 static void print_usage(const char *progname) {
-    printf("Realtek RTL8156 / RTL8157 / RTL815x macOS Diagnostics & Control CLI (v1.0.4)\n\n");
+    printf("Realtek RTL8156 / RTL8157 / RTL815x macOS Diagnostics & Control CLI (v1.0.5)\n\n");
     printf("Usage:\n");
     printf("  %s [options] <command> [arguments]\n\n", progname);
     printf("Commands:\n");
@@ -26,7 +26,7 @@ static void print_usage(const char *progname) {
     printf("  phy [--restart-an]          Detailed MII/PHY register dump and auto-negotiation matrix\n");
     printf("  eee [status|disable|enable] Inspect or toggle Energy Efficient Ethernet\n");
     printf("  power [status|no-sleep|default] Inspect power controls and configure link power saving\n");
-    printf("  led [status|set <mode>]     Inspect or customize LED patterns (unavailable on RTL8157)\n");
+    printf("  led [status|set <mode>]     Read LED selectors or apply a preset or raw selector\n");
     printf("  reg read <mcu> <addr>       Directly read register (pla | usb | phy | ip | bmu)\n");
     printf("  reg write <mcu> <addr> <val> [size] Directly write register (size: 8, 16, 32)\n");
     printf("  reg dump <mcu> <addr> <cnt> Hexdump a range of registers\n\n");
@@ -48,10 +48,10 @@ static void cmd_list(rtl_dev_t *devices, int count) {
     printf("\nConnected Realtek USB Network Adapters (%d found):\n", count);
     printf("-----------------------------------------------------------------\n");
     for (int i = 0; i < count; i++) {
-        printf("[%d] %-10s | %-12s | MAC: %s | %s | %s\n",
-               i,
-               devices[i].bsd_name,
-               devices[i].version_info->name,
+        printf("[%d] %-10s | %s | Revision: ", i, devices[i].bsd_name, devices[i].version_info->name);
+        if (devices[i].revision_known) printf("0x%04x", devices[i].version_raw);
+        else printf("dont know");
+        printf(" | MAC: %s | %s | %s\n",
                devices[i].mac_address[0] ? devices[i].mac_address : "dont know",
                devices[i].usb_speed[0] ? devices[i].usb_speed : "dont know",
                devices[i].product_name);

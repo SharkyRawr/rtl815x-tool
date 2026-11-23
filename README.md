@@ -8,18 +8,30 @@ The tool communicates directly with the controller's **On-Chip Peripheral (OCP)*
 
 ## Supported Chipsets
 
-| Chipset | Max Link Speed | Revision Codes | Typical Hardware |
-| :--- | :--- | :--- | :--- |
-| **RTL8156B** | **2.5 Gbps** | `0x7050`, `0x7060`, `0x7070`, `0x7400`, `0x7410` | 2.5G USB-C/USB-3 Adapters & Docks |
-| **RTL8156 / RTL8156A** | **2.5 Gbps** | `0x7020`, `0x7030` | 2.5G USB-A / USB-C Adapters (1st Gen) |
-| **RTL8157** | **5.0 Gbps** | `0x1030` (RTL_VER_16) | 5G Multi-Gigabit USB Adapters |
-| **RTL8153 / RTL8153B/C** | **1.0 Gbps** | `0x5c00`, `0x5c10`, `0x5c20`, `0x5c30`, `0x6000`, `0x6010` | Standard Gigabit USB Dongles & Docks |
-| **RTL8152 / RTL8152B** | **100 Mbps** | `0x4c00`, `0x4c10` | Fast Ethernet Adapters |
+| Chipset reported by the CLI | Maximum Ethernet link | Masked hardware revision |
+| :--- | :--- | :--- |
+| RTL8152B | 100 Mb/s | `0x4c00`, `0x4c10` |
+| RTL8153A | 1 Gb/s | `0x5c00`, `0x5c10`, `0x5c20`, `0x5c30` |
+| RTL8153B | 1 Gb/s | `0x6000`, `0x6010` |
+| RTL8153C | 1 Gb/s | `0x6400` |
+| RTL8156A | 2.5 Gb/s | `0x7020`, `0x7030` |
+| RTL8156 (Windows family match) | 2.5 Gb/s | `0x7050`, `0x7060`, `0x7070` |
+| RTL8156B | 2.5 Gb/s | `0x7400`, `0x7410` |
+| RTL8157 | 5 Gb/s | `0x1030` (Realtek `RTL_VER_16`) |
 
-RTL8157 discovery matches Realtek USB product IDs `8157`, `8057`, `a157`, and
-`8d57`, plus the OEM ID `1f9b:25c3`. The tool checks the masked hardware
-revision in PLA TCR1 before using the RTL8157 register layout. These IDs come
-from Realtek’s Windows driver. [Driver package, rtu57cx22x64sta.INF](https://plugable.s3.us-east-1.amazonaws.com/bin/Realtek/Install_USB_Win11_11022_20_02062026.zip)
+Discovery matches USB vendor/product IDs for Realtek adapters and OEM dongles
+and docks. The CLI reads `PLA_TCR1 & 0x7cf0` before selecting the register
+layout. An unreadable or unsupported revision prevents feature commands.
+The exact revision mappings come from Linux and Realtek's driver.
+[Linux revision table](https://github.com/torvalds/linux/blob/b6a9fa34ce4187cb69d3c588a4bbffc31ce5db8f/drivers/net/usb/r8152.c#L10010-L10064) · [Realtek revision table](https://github.com/awesometic/realtek-r8152-dkms/blob/c1034ab62ddc48383118598f43c3227fc53c309e/src/r8152.c#L33445-L33507)
+
+For `0x7050`, `0x7060` and `0x7070`, Realtek's Windows driver
+`rtu56cx22x64.sys` matches the family with `(revision & 0x7c00) == 0x7000`
+at RVA `0x47f97`. It assigns chip ID `0x4000` and selects the same operations
+as `0x7030` at RVA `0x48e17`. This identifies the first-generation register
+layout. The exact silicon stepping and presence of shipping boards with each
+of these codes remain unconfirmed. The CLI accepts those three codes explicitly.
+[Realtek Windows 11 driver package](https://plugable.s3.us-east-1.amazonaws.com/bin/Realtek/Install_USB_Win11_11022_20_02062026.zip)
 
 ---
 
@@ -40,13 +52,13 @@ from Realtek’s Windows driver. [Driver package, rtu57cx22x64sta.INF](https://p
   * Side-by-side comparison of local and link partner advertisements. Unavailable values display as `dont know`.
   * On-demand PHY auto-negotiation restart (`--restart-an`) to re-sync link without unplugging.
 * **Energy Efficient Ethernet Tuning (`eee`):**
-  * Inspect Low Power Idle (LPI) TX/RX configuration and EEE advertisement at 100 Mb/s, 1 Gb/s, 2.5 Gb/s, and 5 Gb/s on RTL8157.
-  * Change EEE configuration with `eee disable` or `eee enable`.
-* **Power Management Tuning (`power`):**
-  * On RTL8157, `power status` reports U1/U2, U2-to-P3, and the suspend UPS enable bit. `power no-sleep` disables the two link-power controls. The `default` preset enables U2-to-P3 and enables U1/U2 at SuperSpeed or faster. The bound driver manages suspend UPS.
-  * Other chipsets use the existing UPS and LPM controls.
-* **LED Pattern Customization (`led`):**
-  * RTL8157 LED control is unavailable. On other supported chipsets, configure LEDs with standard, link-only (solid), activity-only (blink on transfer), stealth mode (all LEDs off), or custom bitmasks.
+  * Read MAC Low Power Idle controls and compare local and partner EEE advertisements for the chipset's speeds. RTL8152B uses indirect MMD access for 100BASE-TX EEE.
+  * `eee enable` reads the PHY's supported EEE modes before advertising them. Both `enable` and `disable` restart auto-negotiation.
+* **Power management (`power`)**
+  * On RTL8152B, `no-sleep` disables PHY link-down power saving and `default` enables it.
+  * On the gigabit and multi-gigabit families, `no-sleep` disables USB U1/U2 and U2-to-P3. `default` follows Realtek's interface-up settings. It enables U2-to-P3 on RTL8153A revisions `0x5c20` and `0x5c30`, RTL8156 and RTL8157. For U1/U2 it enables tolerance on RTL8153A, enables U1/U2 on RTL8153C, and uses the negotiated USB speed on RTL8153B, RTL8156 and RTL8157 (SuperSpeed or faster). RTL8157 also reports the driver-managed suspend UPS bit. [Realtek power routines](https://github.com/awesometic/realtek-r8152-dkms/blob/c1034ab62ddc48383118598f43c3227fc53c309e/src/r8152.c#L12035-L12474)
+* **LED configuration (`led`)**
+  * Read or write one packed selector on RTL8152B/RTL8153, or four per-pin selectors on RTL8156/RTL8157. See the LED command reference below for available presets.
 * **Raw Register Access (`reg`):**
   * Direct read/write/dump of PLA, USB, and PHY registers, plus the RTL8157 IP and BMU register spaces for development and reverse engineering.
 
@@ -88,10 +100,12 @@ endpoint under AddressSanitizer and UndefinedBehaviorSanitizer. The tests cover
 device selection, failed and short USB transfers, write error propagation,
 resolved link speeds, and watch intervals without changing a connected adapter.
 
-The RTL8157 fixture emulates both USB command interfaces, including their busy
-flags. It covers 5 Gb/s link and EEE advertisements, auto-negotiation restart,
-tally reads and reset, monitoring, power controls, and raw register access.
-Physical RTL8157 operation has yet to be verified.
+The mock USB endpoint exercises every revision in the table, including speed
+reporting, register selection, EEE, power, LEDs and counters. The RTL8157
+fixture also emulates the busy flags on its two indirect command interfaces.
+Read-only commands have been checked on a physical RTL8156B (`0x7410`) at
+2.5 Gb/s using Apple's NCM driver. Other revisions and physical tuning writes
+still require hardware verification.
 
 Commands return a nonzero exit status on USB failures. Register operations stop
 at the first failure; a command that already performed some writes can leave
@@ -108,15 +122,15 @@ five-second interval. Intervals must be finite and between 0.2 and 3600 seconds.
 ```
 ```text
 =================================================================
- Realtek USB Ethernet Diagnostics: RTL8156B (v2-alt/BG (2.5GbE))
+ Realtek USB Ethernet Diagnostics: RTL8156B (RTL_VER_13)
 =================================================================
  Hardware Identification:
    Chip Family      : RTL8156B
-   Revision Code    : 0x7410 (v2-alt/BG (2.5GbE))
+   Revision Code    : 0x7410 (RTL_VER_13)
    USB VID:PID      : 0bda:8156 (Realtek USB 10_100_1G_2_5G LAN)
    USB Bus Speed    : 5000 Mbps
    Hardware MAC     : 00:e0:4c:68:00:82
-   macOS Interface  : en12 (Driver: com.realtek.dext.RTL815xEthernet)
+   macOS Interface  : en12 (Driver: com.apple.driver.usb.cdc.ncm)
 
  Link & Physical Layer (PHY):
    Link State       : UP (Active)
@@ -192,7 +206,6 @@ Displays an in-place updating terminal dashboard tracking packet rates (pkt/s), 
  Auto-Negotiation Advertisements:
    Speed / Technology     | Local Adapter    | Link Partner
   ------------------------+------------------+-------------------
-   5GBASE-T Full          | No               | No
    2.5GBASE-T Full        | Yes              | Yes
    1000BASE-T Full        | Yes              | Yes
    1000BASE-T Half        | No               | No
@@ -228,20 +241,32 @@ To re-enable EEE:
 
 ### 6. LED Configuration
 
-The RTL8157 selector addresses and bit assignments are unknown. On that chip,
-`led` reports the limitation and exits before accessing registers.
+All listed revisions support `led status`, `led set default`, and a raw 16-bit
+selector. The default is a preset and can differ from the adapter maker's
+configuration. Record the current values to restore the board's original pattern.
+
+| Family | Selectors | Additional named presets |
+| :--- | :--- | :--- |
+| RTL8152B, RTL8153A/B | Packed word at `0xdd90` | `link-only` (LED0), `activity-only` (LED1), `off` |
+| RTL8153C | Packed word at `0xdd90` | Individual function bits unverified |
+| RTL8156 / RTL8156A | Four words at `0xdd8a`, `0xdd8c`, `0xdd8e`, `0xdd90` | Individual function bits unverified |
+| RTL8156B | Same four words | `link-only`, `activity-only`, `off` on all four pins |
+| RTL8157 | Same four words | Individual function bits unverified |
+
+On four-selector chips, `led set 0x<word>` writes that word to every pin.
+Use a 16-bit PLA register write to change one pin. The RTL8156 preset in pin
+order is `0220 0208 0202 0201`. The RTL8157 preset is `0220 0208 0203 0280`.
+The register addresses, widths and multi-gigabit defaults come from
+Realtek PATCH64 2.0.29 (`LED_SEL_CFG`). [Realtek programming utility](https://www.station-drivers.com/index.php/en-us/component/remository/Drivers/Realtek/Lan/RTL8152-8153-8155-8156-8157-8159/Utilities--and--Firmwares/Realtek-RTL8153DD-RX-parametre-modification-Tool-Version-2.0.29/lang,en-us/)
+
+The documented link and activity presets preserve the board's polarity bits.
+`stealth` is an alias for `off`. [RTL8152B datasheet, §6.2](https://boardcon.com/download/RTL8152B-VB-CG.pdf) · [RTL8153 datasheet, §6.2](https://www.olimex.com/Products/USB-Modules/Ethernet/USB-GIGABIT/resources/rtl8153.pdf) · [RTL8153B datasheet, §6.2](https://www.manuallib.com/download/DA71CC8BAF23E63B442AEA97F042F3FC.pdf) · [RTL8156BG(S) datasheet, §6.2](https://datasheet.lcsc.com/datasheet/pdf/eca7d8d1da81204f4a10b196c7546181.pdf)
+
 ```bash
-# Check current LED configuration
 ./rtl815x-tool led status
-
-# Turn off all LEDs (stealth mode)
-./rtl815x-tool led set off
-
-# Solid link LED only (no activity blinking)
-./rtl815x-tool led set link-only
-
-# Apply the tool’s default LED preset
 ./rtl815x-tool led set default
+# Set only LED0 to the RTL8157 preset value
+./rtl815x-tool reg write pla 0xdd8a 0x0220 16
 ```
 
 ### 7. Direct Register Access (Developer / Debugger Mode)

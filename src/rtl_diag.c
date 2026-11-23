@@ -61,11 +61,12 @@ int rtl_diag_print_status(rtl_dev_t *dev) {
     const char *speed_str = "Link Down";
     const char *duplex_str = "N/A";
 
+    uint32_t max_speed = dev->version_info->max_speed_mbps;
     /* Report the resolved link, not the highest common advertised ability. */
     if (link_up) {
-        if (phy_status & PHY_STAT_5000) speed_str = "5.0 Gbps (5000BASE-T)";
-        else if (phy_status & PHY_STAT_2500) speed_str = "2.5 Gbps (2500BASE-T)";
-        else if (phy_status & PHY_STAT_1000) speed_str = "1.0 Gbps (1000BASE-T)";
+        if (max_speed >= 5000 && (phy_status & PHY_STAT_5000)) speed_str = "5.0 Gbps (5000BASE-T)";
+        else if (max_speed >= 2500 && (phy_status & PHY_STAT_2500)) speed_str = "2.5 Gbps (2500BASE-T)";
+        else if (max_speed >= 1000 && (phy_status & PHY_STAT_1000)) speed_str = "1.0 Gbps (1000BASE-T)";
         else if (phy_status & PHY_STAT_100) speed_str = "100 Mbps (100BASE-TX)";
         else if (phy_status & PHY_STAT_10) speed_str = "10 Mbps (10BASE-T)";
         else speed_str = "dont know";
@@ -117,12 +118,13 @@ int rtl_diag_print_phy(rtl_dev_t *dev) {
     if (rtl_mdio_read(dev, MII_ADVERTISE, &adv) != 0) return -1;
     uint16_t lpa;
     if (rtl_mdio_read(dev, MII_LPA, &lpa) != 0) return -1;
-    uint16_t giga_ctrl;
-    if (rtl_mdio_read(dev, MII_CTRL1000, &giga_ctrl) != 0) return -1;
-    uint16_t giga_stat;
-    if (rtl_mdio_read(dev, MII_STAT1000, &giga_stat) != 0) return -1;
+    uint32_t max_speed = dev->version_info->max_speed_mbps;
+    uint16_t giga_ctrl = 0, giga_stat = 0;
+    if (max_speed >= 1000 &&
+        (rtl_mdio_read(dev, MII_CTRL1000, &giga_ctrl) != 0 ||
+         rtl_mdio_read(dev, MII_STAT1000, &giga_stat) != 0)) return -1;
     uint16_t mg_ctrl = 0, mg_stat = 0;
-    bool multi_gig_read = dev->version_info->max_speed_mbps >= 2500;
+    bool multi_gig_read = max_speed >= 2500;
     bool peer_known = (bmsr & BMSR_LSTATUS) && (bmsr & BMSR_ANEGCOMPLETE);
     if (multi_gig_read &&
         (rtl_ocp_reg_read(dev, OCP_2500_CTRL, &mg_ctrl) != 0 ||
@@ -147,18 +149,22 @@ int rtl_diag_print_phy(rtl_dev_t *dev) {
     printf("\n Auto-Negotiation Advertisements:\n");
     printf("   %-22s | %-16s | %-16s\n", "Speed / Technology", "Local Adapter", "Link Partner");
     printf("  ------------------------+------------------+-------------------\n");
-    printf("   %-22s | %-16s | %-16s\n", "5GBASE-T Full",
-           advertised(multi_gig_read, mg_ctrl & ADV_5000_FULL),
-           advertised(multi_gig_read && peer_known, mg_stat & LP_5000_FULL));
-    printf("   %-22s | %-16s | %-16s\n", "2.5GBASE-T Full",
-           advertised(multi_gig_read, mg_ctrl & ADV_2500_FULL),
-           advertised(multi_gig_read && peer_known, mg_stat & LP_2500_FULL));
-    printf("   %-22s | %-16s | %-16s\n", "1000BASE-T Full",
-           advertised(true, giga_ctrl & 0x0200),
-           advertised(peer_known, giga_stat & 0x0800));
-    printf("   %-22s | %-16s | %-16s\n", "1000BASE-T Half",
-           advertised(true, giga_ctrl & 0x0100),
-           advertised(peer_known, giga_stat & 0x0400));
+    if (max_speed >= 5000)
+        printf("   %-22s | %-16s | %-16s\n", "5GBASE-T Full",
+               advertised(true, mg_ctrl & ADV_5000_FULL),
+               advertised(peer_known, mg_stat & LP_5000_FULL));
+    if (max_speed >= 2500)
+        printf("   %-22s | %-16s | %-16s\n", "2.5GBASE-T Full",
+               advertised(true, mg_ctrl & ADV_2500_FULL),
+               advertised(peer_known, mg_stat & LP_2500_FULL));
+    if (max_speed >= 1000)
+        printf("   %-22s | %-16s | %-16s\n", "1000BASE-T Full",
+               advertised(true, giga_ctrl & 0x0200),
+               advertised(peer_known, giga_stat & 0x0800));
+    if (max_speed >= 1000)
+        printf("   %-22s | %-16s | %-16s\n", "1000BASE-T Half",
+               advertised(true, giga_ctrl & 0x0100),
+               advertised(peer_known, giga_stat & 0x0400));
     printf("   %-22s | %-16s | %-16s\n", "100BASE-TX Full",
            advertised(true, adv & 0x0100),
            advertised(peer_known, lpa & 0x0100));
